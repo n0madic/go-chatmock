@@ -1,0 +1,85 @@
+package sse
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+
+	"github.com/n0madic/go-chatmock/internal/types"
+)
+
+// TranslateTextOptions holds options for text completion SSE translation.
+type TranslateTextOptions struct {
+	Verbose      bool
+	IncludeUsage bool
+}
+
+// TranslateText reads upstream SSE events and writes OpenAI text completion SSE chunks.
+func TranslateText(w http.ResponseWriter, body io.ReadCloser, model string, created int64, opts TranslateTextOptions) {
+	defer body.Close()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return
+	}
+
+	reader := NewReader(body)
+	responseID := "cmpl-stream"
+	var upstreamUsage *types.Usage
+
+	writeChunk := func(chunk any) {
+		data, _ := json.Marshal(chunk)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	for {
+		evt, err := reader.Next()
+		if err != nil {
+			break
+		}
+
+		if resp, ok := evt.Data["response"].(map[string]any); ok {
+			if id, ok := resp["id"].(string); ok && id != "" {
+				responseID = id
+			}
+		}
+
+		switch evt.Type {
+		case "response.output_text.delta":
+			delta, _ := evt.Data["delta"].(string)
+			writeChunk(types.TextCompletionChunk{
+				ID: responseID, Object: "text_completion.chunk", Created: created, Model: model,
+				Choices: []types.TextChunkChoice{{Index: 0, Text: delta, FinishReason: nil}},
+			})
+
+		case "response.output_text.done":
+			writeChunk(types.TextCompletionChunk{
+				ID: responseID, Object: "text_completion.chunk", Created: created, Model: model,
+				Choices: []types.TextChunkChoice{{Index: 0, Text: "", FinishReason: types.StringPtr("stop")}},
+			})
+
+		case "response.completed":
+			upstreamUsage = extractUsage(evt.Data)
+			if opts.IncludeUsage && upstreamUsage != nil {
+				writeChunk(types.TextCompletionChunk{
+					ID: responseID, Object: "text_completion.chunk", Created: created, Model: model,
+					Choices: []types.TextChunkChoice{{Index: 0, Text: "", FinishReason: nil}},
+					Usage:   upstreamUsage,
+				})
+			}
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			flusher.Flush()
+			return
+		}
+	}
+
+	// Stream ended without response.completed
+	writeChunk(types.TextCompletionChunk{
+		ID: responseID, Object: "text_completion.chunk", Created: created, Model: model,
+		Choices: []types.TextChunkChoice{{Index: 0, Text: "", FinishReason: types.StringPtr("stop")}},
+	})
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
