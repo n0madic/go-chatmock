@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +44,12 @@ type remoteModelsResponse struct {
 	Models []RemoteModel `json:"models"`
 }
 
+type diskModelsCache struct {
+	FetchedAt string        `json:"fetched_at"`
+	ETag      string        `json:"etag"`
+	Models    []RemoteModel `json:"models"`
+}
+
 // Registry fetches and caches the available model list from the upstream.
 type Registry struct {
 	mu        sync.RWMutex
@@ -52,15 +60,40 @@ type Registry struct {
 	etag      string
 }
 
-// NewRegistry creates a model registry backed by the given token manager.
+// modelsCachePath is a function variable so tests can override where warm cache
+// is read from.
+var modelsCachePath = func() string {
+	if d := os.Getenv("CODEX_HOME"); d != "" {
+		return filepath.Join(d, "models_cache.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".codex", "models_cache.json")
+}
+
+// NewRegistry creates a model registry backed by the given token manager and
+// preloads models from a local Codex cache file when available.
 func NewRegistry(tm *auth.TokenManager) *Registry {
-	return &Registry{tm: tm}
+	r := &Registry{tm: tm}
+	loaded, missing := r.loadFromDiskCache()
+	if !loaded && missing && tm != nil {
+		go func() {
+			r.fetchMu.Lock()
+			defer r.fetchMu.Unlock()
+			if err := r.doFetch(); err != nil {
+				slog.Warn("initial models refresh failed after missing cache", "error", err)
+			}
+		}()
+	}
+	return r
 }
 
 // GetModels returns the cached remote model list, refreshing if needed.
-// On first call, blocks to fetch. On stale cache, refreshes in background and
-// returns the cached value immediately. Falls back to the static catalog if the
-// remote fetch fails or produces an empty list.
+// If no cache is available, first call blocks to fetch. On stale cache, refreshes
+// in background and returns the cached value immediately. Falls back to the static
+// catalog if the remote fetch fails or produces an empty list.
 func (r *Registry) GetModels() []RemoteModel {
 	r.mu.RLock()
 	age := time.Since(r.lastFetch)
@@ -216,6 +249,47 @@ func (r *Registry) doFetch() error {
 	r.mu.Unlock()
 
 	return nil
+}
+
+func (r *Registry) loadFromDiskCache() (loaded bool, missing bool) {
+	path := modelsCachePath()
+	if path == "" {
+		return false, true
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, true
+		}
+		return false, false
+	}
+
+	var cache diskModelsCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return false, false
+	}
+	if len(cache.Models) == 0 {
+		return false, false
+	}
+
+	var fetchedAt time.Time
+	if cache.FetchedAt != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, cache.FetchedAt)
+		if err == nil {
+			fetchedAt = parsed
+		}
+	}
+
+	r.mu.Lock()
+	r.models = cache.Models
+	r.lastFetch = fetchedAt
+	if cache.ETag != "" {
+		r.etag = cache.ETag
+	}
+	r.mu.Unlock()
+
+	return true, false
 }
 
 // StaticFallback converts the static catalog to a []RemoteModel slice.

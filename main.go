@@ -258,10 +258,10 @@ func printAvailableModels(tm *auth.TokenManager) {
 	fmt.Println("\U0001F916 Available Models")
 
 	reg := models.NewRegistry(tm)
-	mods, err := reg.Refresh()
+	mods := reg.GetModels()
 	isLive := reg.IsPopulated()
 
-	if err != nil || !isLive {
+	if !isLive {
 		fmt.Println("  (could not fetch from API, showing static list)")
 	}
 
