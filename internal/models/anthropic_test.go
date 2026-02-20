@@ -96,3 +96,49 @@ func TestResolveAnthropicModel(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveAnthropicReasoningEffort(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantEffort string
+		wantMatch  bool
+	}{
+		{
+			name:       "opus uses xhigh",
+			input:      "claude-opus-4-1",
+			wantEffort: anthropicOpusReasoningEffort,
+			wantMatch:  true,
+		},
+		{
+			name:       "opus normalization still matches",
+			input:      " Claude-OPUS-4-1@latest ",
+			wantEffort: anthropicOpusReasoningEffort,
+			wantMatch:  true,
+		},
+		{
+			name:       "sonnet has no override",
+			input:      "claude-sonnet-4-5",
+			wantEffort: "",
+			wantMatch:  false,
+		},
+		{
+			name:       "empty has no override",
+			input:      "",
+			wantEffort: "",
+			wantMatch:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotEffort, gotMatch := ResolveAnthropicReasoningEffort(tt.input)
+			if gotEffort != tt.wantEffort {
+				t.Fatalf("ResolveAnthropicReasoningEffort(%q) effort = %q, want %q", tt.input, gotEffort, tt.wantEffort)
+			}
+			if gotMatch != tt.wantMatch {
+				t.Fatalf("ResolveAnthropicReasoningEffort(%q) match = %v, want %v", tt.input, gotMatch, tt.wantMatch)
+			}
+		})
+	}
+}

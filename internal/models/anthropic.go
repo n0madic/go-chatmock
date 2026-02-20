@@ -8,6 +8,9 @@ const (
 
 	// anthropicHaikuMappedModel routes Haiku-family IDs to the mini tier.
 	anthropicHaikuMappedModel = "gpt-5.1-codex-mini"
+
+	// anthropicOpusReasoningEffort routes Opus-family IDs to xhigh effort.
+	anthropicOpusReasoningEffort = "xhigh"
 )
 
 // ResolveAnthropicModel maps an Anthropic model ID to an OpenAI/Codex model ID.
@@ -39,6 +42,19 @@ func ResolveAnthropicModel(input string, fallback string) (string, bool) {
 	}
 
 	return fallback, false
+}
+
+// ResolveAnthropicReasoningEffort returns an effort override for Anthropic model IDs.
+// The bool return value reports whether an explicit override rule matched.
+func ResolveAnthropicReasoningEffort(input string) (string, bool) {
+	name := normalizeAnthropicModelID(input)
+	if name == "" {
+		return "", false
+	}
+	if strings.Contains(name, "opus") {
+		return anthropicOpusReasoningEffort, true
+	}
+	return "", false
 }
 
 func normalizeAnthropicModelID(input string) string {

@@ -77,10 +77,15 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		defaultWebSearchApplied = true
 	}
 
+	var reasoningOverrides *types.ReasoningParam
+	if effort, ok := models.ResolveAnthropicReasoningEffort(req.Model); ok {
+		reasoningOverrides = &types.ReasoningParam{Effort: effort}
+	}
+
 	reasoningParam := reasoning.BuildReasoningParam(
 		s.Config.ReasoningEffort,
 		s.Config.ReasoningSummary,
-		nil,
+		reasoningOverrides,
 		model,
 	)
 	reasoningEffort := ""
