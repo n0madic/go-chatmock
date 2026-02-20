@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,7 +10,6 @@ import (
 	"github.com/n0madic/go-chatmock/internal/auth"
 	"github.com/n0madic/go-chatmock/internal/config"
 	"github.com/n0madic/go-chatmock/internal/models"
-	"github.com/n0madic/go-chatmock/internal/types"
 	"github.com/n0madic/go-chatmock/internal/upstream"
 )
 
@@ -124,16 +122,6 @@ func (s *Server) verboseMiddleware(next http.Handler) http.Handler {
 		slog.Info("request", "method", r.Method, "path", r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, types.ErrorResponse{Error: types.ErrorDetail{Message: message}})
 }
 
 // validateModel checks whether model is in the registry, writing a 400 error and

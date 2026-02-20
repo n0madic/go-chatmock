@@ -110,12 +110,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(resp.Body.Body)
 		resp.Body.Body.Close()
-		var errResp types.ErrorResponse
-		if json.Unmarshal(errBody, &errResp) == nil && errResp.Error.Message != "" {
-			writeError(w, resp.StatusCode, errResp.Error.Message)
-			return
-		}
-		writeError(w, resp.StatusCode, "Upstream error")
+		writeError(w, resp.StatusCode, formatUpstreamError(resp.StatusCode, errBody))
 		return
 	}
 

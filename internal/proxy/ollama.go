@@ -69,7 +69,7 @@ func (s *Server) handleOllamaShow(w http.ResponseWriter, r *http.Request) {
 	}
 	model, _ := payload["model"].(string)
 	if model == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Model not found"})
+		writeOllamaError(w, http.StatusBadRequest, "Model not found")
 		return
 	}
 
@@ -107,7 +107,7 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON body"})
+		writeOllamaError(w, http.StatusBadRequest, "Invalid JSON body")
 		return
 	}
 
@@ -147,7 +147,7 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	rtChoice, _ := payload["responses_tool_choice"].(string)
 	extraTools, hadResponsesTools := s.extractOllamaResponsesTools(rtPayload, rtChoice)
 	if extraTools == nil && hadResponsesTools {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Only web_search/web_search_preview are supported in responses_tools"})
+		writeOllamaError(w, http.StatusBadRequest, "Only web_search/web_search_preview are supported in responses_tools")
 		return
 	}
 	if len(extraTools) > 0 {
@@ -159,7 +159,7 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if modelName == "" || len(messages) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+		writeOllamaError(w, http.StatusBadRequest, "Invalid request format")
 		return
 	}
 
@@ -174,7 +174,7 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 		if hint != "" {
 			msg += "; available models: " + hint
 		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		writeOllamaError(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -198,7 +198,7 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.upstreamClient.Do(r.Context(), upReq)
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		writeOllamaError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	limits.RecordFromResponse(resp.Headers)
@@ -214,15 +214,23 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 				resp = resp2
 			} else {
 				resp.Body.Body.Close()
-				if resp2 != nil {
-					resp2.Body.Body.Close()
+				if err2 != nil {
+					writeOllamaError(w, http.StatusBadGateway, "Upstream retry failed after removing responses_tools: "+err2.Error())
+					return
 				}
-				writeJSON(w, resp.StatusCode, map[string]string{"error": "Upstream error"})
+				if resp2 == nil {
+					writeOllamaError(w, http.StatusBadGateway, "Upstream retry failed after removing responses_tools: empty response")
+					return
+				}
+				errBody, _ := io.ReadAll(resp2.Body.Body)
+				resp2.Body.Body.Close()
+				writeOllamaError(w, resp2.StatusCode, formatUpstreamError(resp2.StatusCode, errBody))
 				return
 			}
 		} else {
+			errBody, _ := io.ReadAll(resp.Body.Body)
 			resp.Body.Body.Close()
-			writeJSON(w, resp.StatusCode, map[string]string{"error": "Upstream error"})
+			writeOllamaError(w, resp.StatusCode, formatUpstreamError(resp.StatusCode, errBody))
 			return
 		}
 	}

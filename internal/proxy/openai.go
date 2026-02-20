@@ -144,21 +144,23 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 				resp = resp2
 			} else {
 				resp.Body.Body.Close()
-				if resp2 != nil {
-					resp2.Body.Body.Close()
+				if err2 != nil {
+					writeError(w, http.StatusBadGateway, "Upstream retry failed after removing responses_tools: "+err2.Error())
+					return
 				}
-				writeError(w, resp.StatusCode, "Upstream error")
+				if resp2 == nil {
+					writeError(w, http.StatusBadGateway, "Upstream retry failed after removing responses_tools: empty response")
+					return
+				}
+				errBody, _ := io.ReadAll(resp2.Body.Body)
+				resp2.Body.Body.Close()
+				writeError(w, resp2.StatusCode, formatUpstreamError(resp2.StatusCode, errBody))
 				return
 			}
 		} else {
 			errBody, _ := io.ReadAll(resp.Body.Body)
 			resp.Body.Body.Close()
-			var errResp types.ErrorResponse
-			if json.Unmarshal(errBody, &errResp) == nil && errResp.Error.Message != "" {
-				writeError(w, resp.StatusCode, errResp.Error.Message)
-				return
-			}
-			writeError(w, resp.StatusCode, "Upstream error")
+			writeError(w, resp.StatusCode, formatUpstreamError(resp.StatusCode, errBody))
 			return
 		}
 	}
@@ -359,12 +361,7 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 	if resp.StatusCode >= 400 {
 		errBody, _ := io.ReadAll(resp.Body.Body)
 		resp.Body.Body.Close()
-		var errResp types.ErrorResponse
-		if json.Unmarshal(errBody, &errResp) == nil && errResp.Error.Message != "" {
-			writeError(w, resp.StatusCode, errResp.Error.Message)
-			return
-		}
-		writeError(w, resp.StatusCode, "Upstream error")
+		writeError(w, resp.StatusCode, formatUpstreamError(resp.StatusCode, errBody))
 		return
 	}
 
