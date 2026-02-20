@@ -80,6 +80,56 @@ type ResponsesInputItem struct {
 	Output    string             `json:"output,omitempty"`
 }
 
+// Alias is an internal struct used for custom unmarshaling of ResponsesInputItem.
+type Alias struct {
+	Type      string          `json:"type"`
+	Role      string          `json:"role,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Arguments string          `json:"arguments,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
+	Output    string          `json:"output,omitempty"`
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for ResponsesInputItem.
+// It handles `content` as either a plain string or an array of ResponsesContent,
+// and defaults `type` to "message" when `role` is present but `type` is absent.
+func (item *ResponsesInputItem) UnmarshalJSON(data []byte) error {
+	var alias Alias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	item.Type = alias.Type
+	item.Role = alias.Role
+	item.Name = alias.Name
+	item.Arguments = alias.Arguments
+	item.CallID = alias.CallID
+	item.Output = alias.Output
+
+	if alias.Content != nil {
+		var s string
+		if err := json.Unmarshal(alias.Content, &s); err == nil {
+			// String content: wrap into a single content item.
+			contentType := "input_text"
+			if alias.Role == "assistant" {
+				contentType = "output_text"
+			}
+			item.Content = []ResponsesContent{{Type: contentType, Text: s}}
+		} else {
+			if err := json.Unmarshal(alias.Content, &item.Content); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Default type to "message" for role-based items that omit the type field.
+	if item.Type == "" && item.Role != "" {
+		item.Type = "message"
+	}
+
+	return nil
+}
+
 // ResponsesContent represents a content item in a Responses API input message.
 type ResponsesContent struct {
 	Type     string `json:"type"`
