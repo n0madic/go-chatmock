@@ -37,6 +37,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Invalid input field")
 		return
 	}
+	normalizeResponsesSystemToUser(inputItems)
 
 	requestedModel := req.Model
 	model := models.NormalizeModelName(requestedModel, s.Config.DebugModel)
@@ -217,4 +218,14 @@ func unmarshalOutputItem(item map[string]any) types.ResponsesOutputItem {
 	var out types.ResponsesOutputItem
 	json.Unmarshal(b, &out) //nolint:errcheck
 	return out
+}
+
+// normalizeResponsesSystemToUser rewrites system-role input messages to user-role,
+// because the upstream Responses endpoint rejects system messages in input.
+func normalizeResponsesSystemToUser(items []types.ResponsesInputItem) {
+	for i := range items {
+		if items[i].Role == "system" && (items[i].Type == "" || items[i].Type == "message") {
+			items[i].Role = "user"
+		}
+	}
 }
