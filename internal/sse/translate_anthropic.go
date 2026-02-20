@@ -1,11 +1,14 @@
 package sse
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	anthropicutil "github.com/n0madic/go-chatmock/internal/anthropic"
 	"github.com/n0madic/go-chatmock/internal/types"
@@ -42,7 +45,7 @@ func TranslateAnthropic(w http.ResponseWriter, body io.ReadCloser, model string)
 		toolArgDeltas  map[string]string
 	}
 	st := &streamState{
-		messageID:      "msg_chatmock_stream",
+		messageID:      newAnthropicMessageID(),
 		textBlockIndex: -1,
 		toolArgs:       map[string]any{},
 		toolArgDeltas:  map[string]string{},
@@ -65,6 +68,9 @@ func TranslateAnthropic(w http.ResponseWriter, body io.ReadCloser, model string)
 				StopSequence: nil,
 				Usage:        types.AnthropicUsage{},
 			},
+		})
+		_ = writeEvent("ping", map[string]any{
+			"type": "ping",
 		})
 	}
 
@@ -286,4 +292,12 @@ func toolInputPartialJSON(raw any) (string, bool) {
 		}
 		return string(b), true
 	}
+}
+
+func newAnthropicMessageID() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return "msg_" + hex.EncodeToString(b[:])
+	}
+	return fmt.Sprintf("msg_%d", time.Now().UnixNano())
 }

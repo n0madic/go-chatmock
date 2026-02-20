@@ -52,7 +52,22 @@ func TestParseToolResultText(t *testing.T) {
 	}
 
 	raw := json.RawMessage(`[{"type":"text","text":"line1"},{"type":"text","text":"line2"}]`)
-	if got := ParseToolResultText(raw); got != "line1line2" {
+	if got := ParseToolResultText(raw); got != "line1\nline2" {
 		t.Fatalf("unexpected block tool_result text: %q", got)
+	}
+
+	raw = json.RawMessage(`{"type":"text","text":"single line"}`)
+	if got := ParseToolResultText(raw); got != "single line" {
+		t.Fatalf("unexpected dict text tool_result: %q", got)
+	}
+
+	raw = json.RawMessage(`{"status":"ok","count":2}`)
+	if got := ParseToolResultText(raw); got != `{"count":2,"status":"ok"}` {
+		t.Fatalf("unexpected generic dict tool_result: %q", got)
+	}
+
+	raw = json.RawMessage(`[{"type":"text","text":"alpha"},{"x":1},true,42]`)
+	if got := ParseToolResultText(raw); got != "alpha\n{\"x\":1}\ntrue\n42" {
+		t.Fatalf("unexpected mixed list tool_result: %q", got)
 	}
 }

@@ -24,6 +24,9 @@ data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tok
 	if !strings.Contains(out, "event: message_start") {
 		t.Fatalf("expected message_start event, got: %s", out)
 	}
+	if !strings.Contains(out, "event: ping") {
+		t.Fatalf("expected ping event after message_start, got: %s", out)
+	}
 	if !strings.Contains(out, "\"type\":\"text_delta\"") {
 		t.Fatalf("expected text_delta payload, got: %s", out)
 	}
@@ -149,5 +152,25 @@ data: {"type":"response.failed","response":{"id":"resp_fail","error":{"message":
 	}
 	if !strings.Contains(out, "\"message\":\"boom\"") {
 		t.Fatalf("expected error message in output, got: %s", out)
+	}
+}
+
+func TestTranslateAnthropicUsesRandomFallbackMessageID(t *testing.T) {
+	stream := `data: {"type":"response.output_text.delta","delta":"Hello"}
+
+data: {"type":"response.output_text.done"}
+
+data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}
+`
+
+	w := httptest.NewRecorder()
+	TranslateAnthropic(w, io.NopCloser(strings.NewReader(stream)), "claude-sonnet-4")
+
+	out := w.Body.String()
+	if !strings.Contains(out, `"id":"msg_`) {
+		t.Fatalf("expected generated msg_ fallback id in message_start, got: %s", out)
+	}
+	if strings.Contains(out, `"id":"msg_chatmock_stream"`) {
+		t.Fatalf("expected non-constant fallback id, got legacy value in: %s", out)
 	}
 }

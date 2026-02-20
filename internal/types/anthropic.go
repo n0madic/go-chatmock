@@ -165,15 +165,43 @@ func ParseToolResultText(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s
 	}
-	var blocks []AnthropicContentBlock
-	if err := json.Unmarshal(raw, &blocks); err == nil {
-		var out strings.Builder
-		for _, b := range blocks {
-			if b.Type == "" || b.Type == "text" {
-				out.WriteString(b.Text)
-			}
-		}
-		return out.String()
+	var v any
+	if err := json.Unmarshal(raw, &v); err == nil {
+		return parseToolResultValue(v)
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+func parseToolResultValue(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case []any:
+		var parts []string
+		for _, item := range t {
+			part := parseToolResultValue(item)
+			if strings.TrimSpace(part) == "" {
+				continue
+			}
+			parts = append(parts, part)
+		}
+		return strings.Join(parts, "\n")
+	case map[string]any:
+		if kind, _ := t["type"].(string); strings.EqualFold(strings.TrimSpace(kind), "text") {
+			if txt, ok := t["text"].(string); ok {
+				return txt
+			}
+		}
+		if txt, ok := t["text"].(string); ok {
+			return txt
+		}
+		if b, err := json.Marshal(t); err == nil {
+			return string(b)
+		}
+		return fmt.Sprint(t)
+	default:
+		return fmt.Sprint(t)
+	}
 }

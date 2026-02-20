@@ -41,8 +41,16 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	resolvedModel, _ := models.ResolveAnthropicModel(req.Model, models.DefaultAnthropicFallbackModel)
+	resolvedModel, matchedModel := models.ResolveAnthropicModel(req.Model, models.DefaultAnthropicFallbackModel)
 	model := models.NormalizeModelName(resolvedModel, s.Config.DebugModel)
+	if s.Config.Verbose {
+		slog.Info("anthropic model mapping",
+			"requested_model", req.Model,
+			"resolved_model", resolvedModel,
+			"normalized_model", model,
+			"explicit_match", matchedModel,
+		)
+	}
 	if s.Config.DebugModel == "" {
 		ok, hint := s.Registry.IsKnownModel(model)
 		if !ok {
