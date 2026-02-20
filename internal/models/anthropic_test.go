@@ -3,6 +3,8 @@ package models
 import "testing"
 
 func TestResolveAnthropicModel(t *testing.T) {
+	const customFallback = "custom-fallback-model"
+
 	tests := []struct {
 		name      string
 		input     string
@@ -13,57 +15,71 @@ func TestResolveAnthropicModel(t *testing.T) {
 		{
 			name:      "haiku maps to codex mini",
 			input:     "claude-3-haiku-20240307",
-			fallback:  DefaultAnthropicFallbackModel,
-			wantModel: "gpt-5.1-codex-mini",
+			fallback:  customFallback,
+			wantModel: anthropicHaikuMappedModel,
 			wantMatch: true,
 		},
 		{
 			name:      "haiku 3.5 maps to codex mini",
 			input:     "claude-3.5-haiku-20241022",
-			fallback:  DefaultAnthropicFallbackModel,
-			wantModel: "gpt-5.1-codex-mini",
+			fallback:  customFallback,
+			wantModel: anthropicHaikuMappedModel,
+			wantMatch: true,
+		},
+		{
+			name:      "haiku normalization still matches",
+			input:     " Claude-3-HAIKU-20240307@latest ",
+			fallback:  customFallback,
+			wantModel: anthropicHaikuMappedModel,
 			wantMatch: true,
 		},
 		{
 			name:      "sonnet 3.5",
 			input:     "claude-3-5-sonnet-latest",
-			fallback:  DefaultAnthropicFallbackModel,
+			fallback:  customFallback,
 			wantModel: DefaultAnthropicFallbackModel,
 			wantMatch: true,
 		},
 		{
 			name:      "sonnet 3.7",
 			input:     "claude-3-7-sonnet-20250219",
-			fallback:  DefaultAnthropicFallbackModel,
+			fallback:  customFallback,
 			wantModel: DefaultAnthropicFallbackModel,
 			wantMatch: true,
 		},
 		{
 			name:      "sonnet 4",
 			input:     "claude-sonnet-4-5",
-			fallback:  DefaultAnthropicFallbackModel,
+			fallback:  customFallback,
 			wantModel: DefaultAnthropicFallbackModel,
 			wantMatch: true,
 		},
 		{
 			name:      "opus",
 			input:     "claude-opus-4-1",
-			fallback:  DefaultAnthropicFallbackModel,
+			fallback:  customFallback,
 			wantModel: DefaultAnthropicFallbackModel,
 			wantMatch: true,
 		},
 		{
-			name:      "unknown falls back",
+			name:      "unknown returns provided fallback",
 			input:     "claude-unknown-next",
-			fallback:  "gpt-5.3-codex",
-			wantModel: "gpt-5.3-codex",
+			fallback:  customFallback,
+			wantModel: customFallback,
 			wantMatch: false,
 		},
 		{
-			name:      "empty input uses fallback",
+			name:      "empty input returns provided fallback",
 			input:     "",
-			fallback:  "gpt-5.3-codex",
-			wantModel: "gpt-5.3-codex",
+			fallback:  customFallback,
+			wantModel: customFallback,
+			wantMatch: false,
+		},
+		{
+			name:      "empty fallback uses default model",
+			input:     "claude-unknown-next",
+			fallback:  "   ",
+			wantModel: DefaultAnthropicFallbackModel,
 			wantMatch: false,
 		},
 	}

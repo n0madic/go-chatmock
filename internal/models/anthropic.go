@@ -2,8 +2,13 @@ package models
 
 import "strings"
 
-// DefaultAnthropicFallbackModel is used when an Anthropic model ID has no explicit mapping.
-const DefaultAnthropicFallbackModel = "gpt-5.3-codex"
+const (
+	// DefaultAnthropicFallbackModel is used when an Anthropic model ID has no explicit mapping.
+	DefaultAnthropicFallbackModel = "gpt-5.3-codex"
+
+	// anthropicHaikuMappedModel routes Haiku-family IDs to the mini tier.
+	anthropicHaikuMappedModel = "gpt-5.1-codex-mini"
+)
 
 // ResolveAnthropicModel maps an Anthropic model ID to an OpenAI/Codex model ID.
 // The bool return value reports whether an explicit mapping rule matched.
@@ -19,7 +24,7 @@ func ResolveAnthropicModel(input string, fallback string) (string, bool) {
 
 	// Haiku family is intentionally routed to codex-mini tier.
 	if strings.Contains(name, "haiku") {
-		return "gpt-5.1-codex-mini", true
+		return anthropicHaikuMappedModel, true
 	}
 
 	switch {
