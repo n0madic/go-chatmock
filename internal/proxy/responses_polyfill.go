@@ -22,7 +22,7 @@ func (s *Server) restoreFunctionCallContext(inputItems []types.ResponsesInputIte
 		} else {
 			// Backward compatibility for entries created before context storage existed.
 			if !s.responsesState.Exists(previousResponseID) {
-				return nil, fmt.Errorf("Unknown or expired previous_response_id %q.", previousResponseID)
+				return nil, fmt.Errorf("unknown or expired previous_response_id %q", previousResponseID)
 			}
 		}
 	}
@@ -33,8 +33,8 @@ func (s *Server) restoreFunctionCallContext(inputItems []types.ResponsesInputIte
 	}
 	if previousResponseID == "" {
 		return nil, fmt.Errorf(
-			"Invalid tool state: function_call_output references call_id(s) with no matching function_call in input: %s. "+
-				"Send previous_response_id from the response that created these tool calls, or include matching function_call items in input.",
+			"invalid tool state: function_call_output references call_id(s) with no matching function_call in input: %s; "+
+				"send previous_response_id from the response that created these tool calls, or include matching function_call items in input",
 			strings.Join(missingCallIDs, ", "),
 		)
 	}
@@ -42,7 +42,7 @@ func (s *Server) restoreFunctionCallContext(inputItems []types.ResponsesInputIte
 	storedCalls, ok := s.responsesState.Get(previousResponseID)
 	if !ok {
 		return nil, fmt.Errorf(
-			"Unknown or expired previous_response_id %q. Unable to resolve call_id(s): %s.",
+			"unknown or expired previous_response_id %q; unable to resolve call_id(s): %s",
 			previousResponseID,
 			strings.Join(missingCallIDs, ", "),
 		)
@@ -64,7 +64,7 @@ func (s *Server) restoreFunctionCallContext(inputItems []types.ResponsesInputIte
 	}
 	if len(unresolved) > 0 {
 		return nil, fmt.Errorf(
-			"previous_response_id %q does not contain required call_id(s): %s. Include matching function_call items in input.",
+			"previous_response_id %q does not contain required call_id(s): %s; include matching function_call items in input",
 			previousResponseID,
 			strings.Join(unresolved, ", "),
 		)

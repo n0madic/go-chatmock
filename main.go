@@ -445,16 +445,12 @@ func printAvailableModelsText(modelsInfo *infoModels) {
 	}
 
 	for _, m := range modelsInfo.Models {
-		var efforts []string
-		for _, effort := range m.ReasoningEfforts {
-			efforts = append(efforts, effort)
-		}
 		line := fmt.Sprintf("  \u2022 %-28s", m.Slug)
 		if m.Description != "" {
 			line += "  " + m.Description
 		}
-		if len(efforts) > 0 {
-			line += "  [" + strings.Join(efforts, " ") + "]"
+		if len(m.ReasoningEfforts) > 0 {
+			line += "  [" + strings.Join(m.ReasoningEfforts, " ") + "]"
 		}
 		fmt.Println(line)
 	}

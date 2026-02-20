@@ -85,7 +85,7 @@ func TestRestoreFunctionCallContextUnknownPreviousID(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "Unknown or expired previous_response_id") {
+	if !strings.Contains(err.Error(), "unknown or expired previous_response_id") {
 		t.Fatalf("unexpected error: %q", err.Error())
 	}
 }
@@ -100,7 +100,7 @@ func TestRestoreFunctionCallContextUnknownPreviousIDWithoutToolOutput(t *testing
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "Unknown or expired previous_response_id") {
+	if !strings.Contains(err.Error(), "unknown or expired previous_response_id") {
 		t.Fatalf("unexpected error: %q", err.Error())
 	}
 }

@@ -177,10 +177,7 @@ func shouldRefreshAccessToken(accessToken, lastRefresh string) bool {
 	if err == nil {
 		if exp, ok := claims["exp"].(float64); ok {
 			expiry := time.Unix(int64(exp), 0)
-			if time.Until(expiry) <= 5*time.Minute {
-				return true
-			}
-			return false
+			return time.Until(expiry) <= 5*time.Minute
 		}
 	}
 
