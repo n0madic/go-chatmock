@@ -19,6 +19,7 @@ import (
 	"github.com/n0madic/go-chatmock/internal/auth"
 	"github.com/n0madic/go-chatmock/internal/config"
 	"github.com/n0madic/go-chatmock/internal/limits"
+	"github.com/n0madic/go-chatmock/internal/models"
 	"github.com/n0madic/go-chatmock/internal/oauth"
 	"github.com/n0madic/go-chatmock/internal/proxy"
 )
@@ -247,8 +248,41 @@ func cmdInfo() int {
 		fmt.Printf("  \u2022 Account ID: %s\n", accountID)
 	}
 	fmt.Println()
+
+	printAvailableModels(tm)
 	printUsageLimits()
 	return 0
+}
+
+func printAvailableModels(tm *auth.TokenManager) {
+	fmt.Println("\U0001F916 Available Models")
+
+	reg := models.NewRegistry(tm)
+	mods, err := reg.Refresh()
+	isLive := reg.IsPopulated()
+
+	if err != nil || !isLive {
+		fmt.Println("  (could not fetch from API, showing static list)")
+	}
+
+	for _, m := range mods {
+		if m.Visibility == "hidden" {
+			continue
+		}
+		var efforts []string
+		for _, lvl := range m.SupportedReasoningLevels {
+			efforts = append(efforts, lvl.Effort)
+		}
+		line := fmt.Sprintf("  \u2022 %-28s", m.Slug)
+		if m.Description != "" {
+			line += "  " + m.Description
+		}
+		if len(efforts) > 0 {
+			line += "  [" + strings.Join(efforts, " ") + "]"
+		}
+		fmt.Println(line)
+	}
+	fmt.Println()
 }
 
 func printUsageLimits() {

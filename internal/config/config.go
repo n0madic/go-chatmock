@@ -9,6 +9,7 @@ const (
 	ClientIDDefault     = "app_EMoamEEZ73f0CkXaXp7hrann"
 	OAuthIssuerDefault  = "https://auth.openai.com"
 	ResponsesURL        = "https://chatgpt.com/backend-api/codex/responses"
+	ModelsURL           = "https://chatgpt.com/backend-api/codex/models"
 	OllamaVersionString = "0.12.10"
 )
 

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,24 +23,35 @@ func (s *Server) handleOllamaVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOllamaTags(w http.ResponseWriter, r *http.Request) {
-	ids := models.ModelCatalog(s.Config.ExposeReasoningModels)
+	mods := s.Registry.GetModels()
 	var modelList []types.OllamaModelEntry
-	for _, id := range ids {
-		modelList = append(modelList, types.OllamaModelEntry{
-			Name:       id,
-			Model:      id,
-			ModifiedAt: "2023-10-01T00:00:00Z",
-			Size:       815319791,
-			Digest:     "8648f39daa8fbf5b18c7b4e6a8fb4990c692751d49917417b8842ca5758e7ffc",
-			Details: types.OllamaModelDetails{
-				ParentModel:       "",
-				Format:            "gguf",
-				Family:            "llama",
-				Families:          []string{"llama"},
-				ParameterSize:     "8.0B",
-				QuantizationLevel: "Q4_0",
-			},
-		})
+	for _, m := range mods {
+		if m.Visibility == "hidden" {
+			continue
+		}
+		ids := []string{m.Slug}
+		if s.Config.ExposeReasoningModels {
+			for _, lvl := range m.SupportedReasoningLevels {
+				ids = append(ids, m.Slug+"-"+lvl.Effort)
+			}
+		}
+		for _, id := range ids {
+			modelList = append(modelList, types.OllamaModelEntry{
+				Name:       id,
+				Model:      id,
+				ModifiedAt: "2023-10-01T00:00:00Z",
+				Size:       815319791,
+				Digest:     "8648f39daa8fbf5b18c7b4e6a8fb4990c692751d49917417b8842ca5758e7ffc",
+				Details: types.OllamaModelDetails{
+					ParentModel:       "",
+					Format:            "gguf",
+					Family:            "llama",
+					Families:          []string{"llama"},
+					ParameterSize:     "8.0B",
+					QuantizationLevel: "Q4_0",
+				},
+			})
+		}
 	}
 	writeJSON(w, http.StatusOK, types.OllamaModelList{Models: modelList})
 }
@@ -155,7 +167,17 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	inputItems := transform.ChatMessagesToResponsesInput(messages)
 
 	modelReasoning := reasoning.ExtractFromModelName(modelName)
-	normalizedModel := models.NormalizeModelName(modelName, "")
+	normalizedModel := models.NormalizeModelName(modelName, s.Config.DebugModel)
+
+	if ok, hint := s.Registry.IsKnownModel(normalizedModel); !ok {
+		msg := fmt.Sprintf("model %q is not available via this endpoint", normalizedModel)
+		if hint != "" {
+			msg += "; available models: " + hint
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+
 	reasoningParam := reasoning.BuildReasoningParam(
 		s.Config.ReasoningEffort,
 		s.Config.ReasoningSummary,

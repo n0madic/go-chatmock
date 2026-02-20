@@ -41,6 +41,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	requestedModel := req.Model
 	model := models.NormalizeModelName(requestedModel, s.Config.DebugModel)
 
+	if !s.validateModel(w, model) {
+		return
+	}
+
 	messages := req.Messages
 	if messages == nil {
 		// Try prompt or input fallback
@@ -293,6 +297,10 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 	requestedModel, _ := payload["model"].(string)
 	model := models.NormalizeModelName(requestedModel, s.Config.DebugModel)
 
+	if !s.validateModel(w, model) {
+		return
+	}
+
 	prompt, _ := payload["prompt"].(string)
 	if prompt == "" {
 		if prompts, ok := payload["prompt"].([]any); ok {
@@ -422,10 +430,22 @@ textDone:
 }
 
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
-	ids := models.ModelCatalog(s.Config.ExposeReasoningModels)
+	mods := s.Registry.GetModels()
 	var data []types.ModelObject
-	for _, id := range ids {
-		data = append(data, types.ModelObject{ID: id, Object: "model", OwnedBy: "owner"})
+	for _, m := range mods {
+		if m.Visibility == "hidden" {
+			continue
+		}
+		data = append(data, types.ModelObject{ID: m.Slug, Object: "model", OwnedBy: "owner"})
+		if s.Config.ExposeReasoningModels {
+			for _, lvl := range m.SupportedReasoningLevels {
+				data = append(data, types.ModelObject{
+					ID:      m.Slug + "-" + lvl.Effort,
+					Object:  "model",
+					OwnedBy: "owner",
+				})
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, types.ModelList{Object: "list", Data: data})
 }

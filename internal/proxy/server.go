@@ -10,6 +10,7 @@ import (
 
 	"github.com/n0madic/go-chatmock/internal/auth"
 	"github.com/n0madic/go-chatmock/internal/config"
+	"github.com/n0madic/go-chatmock/internal/models"
 	"github.com/n0madic/go-chatmock/internal/types"
 	"github.com/n0madic/go-chatmock/internal/upstream"
 )
@@ -19,17 +20,24 @@ type Server struct {
 	Config         *config.ServerConfig
 	httpServer     *http.Server
 	upstreamClient *upstream.Client
+	Registry       *models.Registry
 }
 
 // New creates a new proxy server with all routes registered.
 func New(cfg *config.ServerConfig) *Server {
 	tm := auth.NewTokenManager(config.ClientID(), config.TokenURL())
 	uc := upstream.NewClient(tm, cfg.Verbose)
+	reg := models.NewRegistry(tm)
 
 	s := &Server{
 		Config:         cfg,
 		upstreamClient: uc,
+		Registry:       reg,
 	}
+
+	// Pre-fetch available models in background so the registry is ready for
+	// the first incoming request.
+	go func() { reg.GetModels() }()
 
 	mux := http.NewServeMux()
 
@@ -41,6 +49,7 @@ func New(cfg *config.ServerConfig) *Server {
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("POST /v1/completions", s.handleCompletions)
 	mux.HandleFunc("GET /v1/models", s.handleListModels)
+	mux.HandleFunc("POST /v1/responses", s.handleResponses)
 
 	// Ollama-compatible routes
 	mux.HandleFunc("POST /api/chat", s.handleOllamaChat)
@@ -125,4 +134,22 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, types.ErrorResponse{Error: types.ErrorDetail{Message: message}})
+}
+
+// validateModel checks whether model is in the registry, writing a 400 error and
+// returning false if it is not. Skips validation when --debug-model is active.
+func (s *Server) validateModel(w http.ResponseWriter, model string) bool {
+	if s.Config.DebugModel != "" {
+		return true
+	}
+	ok, hint := s.Registry.IsKnownModel(model)
+	if ok {
+		return true
+	}
+	msg := fmt.Sprintf("model %q is not available via this endpoint", model)
+	if hint != "" {
+		msg += "; available models: " + hint
+	}
+	writeError(w, http.StatusBadRequest, msg)
+	return false
 }
