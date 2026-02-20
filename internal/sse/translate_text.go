@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/n0madic/go-chatmock/internal/types"
@@ -29,7 +30,11 @@ func TranslateText(w http.ResponseWriter, body io.ReadCloser, model string, crea
 	var upstreamUsage *types.Usage
 
 	writeChunk := func(chunk any) {
-		data, _ := json.Marshal(chunk)
+		data, err := json.Marshal(chunk)
+		if err != nil {
+			slog.Error("failed to marshal SSE chunk", "error", err)
+			return
+		}
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
@@ -61,7 +66,7 @@ func TranslateText(w http.ResponseWriter, body io.ReadCloser, model string, crea
 			})
 
 		case "response.completed":
-			upstreamUsage = extractUsage(evt.Data)
+			upstreamUsage = types.ExtractUsageFromEvent(evt.Data)
 			if opts.IncludeUsage && upstreamUsage != nil {
 				writeChunk(types.TextCompletionChunk{
 					ID: responseID, Object: "text_completion.chunk", Created: created, Model: model,

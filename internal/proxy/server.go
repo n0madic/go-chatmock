@@ -77,7 +77,6 @@ func New(cfg *config.ServerConfig) *Server {
 
 // ListenAndServe starts the proxy server.
 func (s *Server) ListenAndServe() error {
-	slog.Info("server starting", "addr", s.httpServer.Addr)
 	return s.httpServer.ListenAndServe()
 }
 

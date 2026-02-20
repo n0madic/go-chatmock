@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -17,6 +18,213 @@ type TranslateChatOptions struct {
 	IncludeUsage    bool
 }
 
+// chatTranslatorState holds all mutable state for an in-progress TranslateChat call.
+type chatTranslatorState struct {
+	// Per-stream config
+	model   string
+	created int64
+	compat  string
+	opts    TranslateChatOptions
+
+	// Response state
+	responseID              string
+	thinkOpen               bool
+	thinkClosed             bool
+	sentStopChunk           bool
+	sawAnySummary           bool
+	pendingSummaryParagraph bool
+	upstreamUsage           *types.Usage
+
+	// Web search tracking
+	wsState     map[string]map[string]any
+	wsIndex     map[string]int
+	wsNextIndex int
+
+	// Output helpers (set once, closed over in TranslateChat)
+	writeChunk func(any)
+	writeDone  func()
+}
+
+func (st *chatTranslatorState) makeDelta(delta types.ChatDelta) types.ChatCompletionChunk {
+	return types.ChatCompletionChunk{
+		ID:      st.responseID,
+		Object:  "chat.completion.chunk",
+		Created: st.created,
+		Model:   st.model,
+		Choices: []types.ChatChunkChoice{
+			{Index: 0, Delta: delta, FinishReason: nil},
+		},
+	}
+}
+
+// handleWebSearchEvent processes any event whose type contains "web_search_call".
+func (st *chatTranslatorState) handleWebSearchEvent(kind string, data map[string]any) {
+	callID, _ := data["item_id"].(string)
+	if callID == "" {
+		callID = "ws_call"
+	}
+	if _, ok := st.wsState[callID]; !ok {
+		st.wsState[callID] = map[string]any{}
+	}
+	mergeWebSearchParams(st.wsState[callID], data)
+	if item, ok := data["item"].(map[string]any); ok {
+		mergeWebSearchParams(st.wsState[callID], item)
+	}
+	argsStr := serializeToolArgs(st.wsState[callID])
+	if _, ok := st.wsIndex[callID]; !ok {
+		st.wsIndex[callID] = st.wsNextIndex
+		st.wsNextIndex++
+	}
+	idx := st.wsIndex[callID]
+	st.writeChunk(types.ChatCompletionChunk{
+		ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
+		Choices: []types.ChatChunkChoice{{
+			Index: 0,
+			Delta: types.ChatDelta{
+				ToolCalls: []types.ToolCall{{
+					Index: idx, ID: callID, Type: "function",
+					Function: types.FunctionCall{Name: "web_search", Arguments: argsStr},
+				}},
+			},
+			FinishReason: nil,
+		}},
+	})
+	if strings.HasSuffix(kind, ".completed") || strings.HasSuffix(kind, ".done") {
+		st.writeChunk(types.ChatCompletionChunk{
+			ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
+			Choices: []types.ChatChunkChoice{{Index: 0, Delta: types.ChatDelta{}, FinishReason: types.StringPtr("tool_calls")}},
+		})
+	}
+}
+
+// handleOutputItemDone processes "response.output_item.done" events for function/web-search calls.
+func (st *chatTranslatorState) handleOutputItemDone(data map[string]any) {
+	item, _ := data["item"].(map[string]any)
+	itemType, _ := item["type"].(string)
+	if itemType != "function_call" && itemType != "web_search_call" {
+		return
+	}
+
+	callID := stringOr(item, "call_id", stringOr(item, "id", ""))
+	name := stringOr(item, "name", "")
+	if itemType == "web_search_call" && name == "" {
+		name = "web_search"
+	}
+
+	rawArgs := item["arguments"]
+	if rawArgs == nil {
+		rawArgs = item["parameters"]
+	}
+	if argsMap, ok := rawArgs.(map[string]any); ok {
+		if _, ok := st.wsState[callID]; !ok {
+			st.wsState[callID] = map[string]any{}
+		}
+		for k, v := range argsMap {
+			st.wsState[callID][k] = v
+		}
+	}
+
+	effArgs := st.wsState[callID]
+	if effArgs == nil {
+		switch a := rawArgs.(type) {
+		case map[string]any:
+			effArgs = a
+		default:
+			effArgs = map[string]any{}
+		}
+	}
+
+	argsStr := serializeToolArgs(effArgs)
+	if _, ok := st.wsIndex[callID]; !ok {
+		st.wsIndex[callID] = st.wsNextIndex
+		st.wsNextIndex++
+	}
+	idx := st.wsIndex[callID]
+
+	if callID != "" && name != "" {
+		st.writeChunk(types.ChatCompletionChunk{
+			ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
+			Choices: []types.ChatChunkChoice{{
+				Index: 0,
+				Delta: types.ChatDelta{
+					ToolCalls: []types.ToolCall{{
+						Index: idx, ID: callID, Type: "function",
+						Function: types.FunctionCall{Name: name, Arguments: argsStr},
+					}},
+				},
+				FinishReason: nil,
+			}},
+		})
+		st.writeChunk(types.ChatCompletionChunk{
+			ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
+			Choices: []types.ChatChunkChoice{{Index: 0, Delta: types.ChatDelta{}, FinishReason: types.StringPtr("tool_calls")}},
+		})
+	}
+}
+
+// handleReasoningDelta processes reasoning summary/text delta events for all compat modes.
+func (st *chatTranslatorState) handleReasoningDelta(kind string, data map[string]any) {
+	deltaTxt, _ := data["delta"].(string)
+	switch st.compat {
+	case "o3":
+		if kind == "response.reasoning_summary_text.delta" && st.pendingSummaryParagraph {
+			st.writeChunk(types.ChatCompletionChunk{
+				ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
+				Choices: []types.ChatChunkChoice{{
+					Index: 0,
+					Delta: types.ChatDelta{Reasoning: types.ReasoningContent{
+						Content: []types.ReasoningPart{{Type: "text", Text: "\n"}},
+					}},
+					FinishReason: nil,
+				}},
+			})
+			st.pendingSummaryParagraph = false
+		}
+		st.writeChunk(types.ChatCompletionChunk{
+			ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
+			Choices: []types.ChatChunkChoice{{
+				Index: 0,
+				Delta: types.ChatDelta{Reasoning: types.ReasoningContent{
+					Content: []types.ReasoningPart{{Type: "text", Text: deltaTxt}},
+				}},
+				FinishReason: nil,
+			}},
+		})
+
+	case "think-tags":
+		if !st.thinkOpen && !st.thinkClosed {
+			st.writeChunk(st.makeDelta(types.ChatDelta{Content: "<think>"}))
+			st.thinkOpen = true
+		}
+		if st.thinkOpen && !st.thinkClosed {
+			if kind == "response.reasoning_summary_text.delta" && st.pendingSummaryParagraph {
+				st.writeChunk(st.makeDelta(types.ChatDelta{Content: "\n"}))
+				st.pendingSummaryParagraph = false
+			}
+			st.writeChunk(st.makeDelta(types.ChatDelta{Content: deltaTxt}))
+		}
+
+	default: // legacy
+		if kind == "response.reasoning_summary_text.delta" {
+			st.writeChunk(types.ChatCompletionChunk{
+				ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
+				Choices: []types.ChatChunkChoice{{
+					Index:        0,
+					Delta:        types.ChatDelta{ReasoningSummary: deltaTxt, Reasoning: deltaTxt},
+					FinishReason: nil,
+				}},
+			})
+		} else {
+			st.writeChunk(types.ChatCompletionChunk{
+				ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
+				Choices: []types.ChatChunkChoice{{
+					Index: 0, Delta: types.ChatDelta{Reasoning: deltaTxt}, FinishReason: nil,
+				}},
+			})
+		}
+	}
+}
+
 // TranslateChat reads upstream SSE events and writes OpenAI chat completion SSE chunks to the response writer.
 func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, created int64, opts TranslateChatOptions) {
 	defer body.Close()
@@ -26,47 +234,38 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 		return
 	}
 
-	reader := NewReader(body)
-	responseID := "chatcmpl-stream"
 	compat := strings.ToLower(strings.TrimSpace(opts.ReasoningCompat))
 	if compat == "" {
 		compat = "think-tags"
 	}
 
-	thinkOpen := false
-	thinkClosed := false
-	sentStopChunk := false
-	sawAnySummary := false
-	pendingSummaryParagraph := false
-	var upstreamUsage *types.Usage
+	st := &chatTranslatorState{
+		model:       model,
+		created:     created,
+		compat:      compat,
+		opts:        opts,
+		responseID:  "chatcmpl-stream",
+		wsState:     map[string]map[string]any{},
+		wsIndex:     map[string]int{},
+		wsNextIndex: 0,
+	}
 
-	// Web search state — stays map[string]any (dynamic upstream parameters)
-	wsState := map[string]map[string]any{}
-	wsIndex := map[string]int{}
-	wsNextIndex := 0
-
-	writeChunk := func(chunk any) {
-		data, _ := json.Marshal(chunk)
+	st.writeChunk = func(chunk any) {
+		data, err := json.Marshal(chunk)
+		if err != nil {
+			slog.Error("failed to marshal SSE chunk", "error", err)
+			return
+		}
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
 
-	writeDone := func() {
+	st.writeDone = func() {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	}
 
-	makeDelta := func(delta types.ChatDelta) types.ChatCompletionChunk {
-		return types.ChatCompletionChunk{
-			ID:      responseID,
-			Object:  "chat.completion.chunk",
-			Created: created,
-			Model:   model,
-			Choices: []types.ChatChunkChoice{
-				{Index: 0, Delta: delta, FinishReason: nil},
-			},
-		}
-	}
+	reader := NewReader(body)
 
 	for {
 		evt, err := reader.Next()
@@ -79,193 +278,46 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 		// Track response ID
 		if resp, ok := evt.Data["response"].(map[string]any); ok {
 			if id, ok := resp["id"].(string); ok && id != "" {
-				responseID = id
+				st.responseID = id
 			}
 		}
 
 		// Web search events
 		if strings.Contains(kind, "web_search_call") {
-			callID, _ := evt.Data["item_id"].(string)
-			if callID == "" {
-				callID = "ws_call"
-			}
-			if _, ok := wsState[callID]; !ok {
-				wsState[callID] = map[string]any{}
-			}
-			mergeWebSearchParams(wsState[callID], evt.Data)
-			if item, ok := evt.Data["item"].(map[string]any); ok {
-				mergeWebSearchParams(wsState[callID], item)
-			}
-			argsStr := serializeToolArgs(wsState[callID])
-			if _, ok := wsIndex[callID]; !ok {
-				wsIndex[callID] = wsNextIndex
-				wsNextIndex++
-			}
-			idx := wsIndex[callID]
-			writeChunk(types.ChatCompletionChunk{
-				ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
-				Choices: []types.ChatChunkChoice{{
-					Index: 0,
-					Delta: types.ChatDelta{
-						ToolCalls: []types.ToolCall{{
-							Index: idx, ID: callID, Type: "function",
-							Function: types.FunctionCall{Name: "web_search", Arguments: argsStr},
-						}},
-					},
-					FinishReason: nil,
-				}},
-			})
-			if strings.HasSuffix(kind, ".completed") || strings.HasSuffix(kind, ".done") {
-				writeChunk(types.ChatCompletionChunk{
-					ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
-					Choices: []types.ChatChunkChoice{{Index: 0, Delta: types.ChatDelta{}, FinishReason: types.StringPtr("tool_calls")}},
-				})
-			}
+			st.handleWebSearchEvent(kind, evt.Data)
 		}
 
 		switch kind {
 		case "response.output_text.delta":
 			delta, _ := evt.Data["delta"].(string)
-			if compat == "think-tags" && thinkOpen && !thinkClosed {
-				writeChunk(makeDelta(types.ChatDelta{Content: "</think>"}))
-				thinkOpen = false
-				thinkClosed = true
+			if st.compat == "think-tags" && st.thinkOpen && !st.thinkClosed {
+				st.writeChunk(st.makeDelta(types.ChatDelta{Content: "</think>"}))
+				st.thinkOpen = false
+				st.thinkClosed = true
 			}
-			writeChunk(makeDelta(types.ChatDelta{Content: delta}))
+			st.writeChunk(st.makeDelta(types.ChatDelta{Content: delta}))
 
 		case "response.output_item.done":
-			item, _ := evt.Data["item"].(map[string]any)
-			itemType, _ := item["type"].(string)
-			if itemType == "function_call" || itemType == "web_search_call" {
-				callID := stringOr(item, "call_id", stringOr(item, "id", ""))
-				name := stringOr(item, "name", "")
-				if itemType == "web_search_call" && name == "" {
-					name = "web_search"
-				}
-				rawArgs := item["arguments"]
-				if rawArgs == nil {
-					rawArgs = item["parameters"]
-				}
-				if argsMap, ok := rawArgs.(map[string]any); ok {
-					if _, ok := wsState[callID]; !ok {
-						wsState[callID] = map[string]any{}
-					}
-					for k, v := range argsMap {
-						wsState[callID][k] = v
-					}
-				}
-				effArgs := wsState[callID]
-				if effArgs == nil {
-					switch a := rawArgs.(type) {
-					case map[string]any:
-						effArgs = a
-					default:
-						effArgs = map[string]any{}
-					}
-				}
-				argsStr := serializeToolArgs(effArgs)
-				if _, ok := wsIndex[callID]; !ok {
-					wsIndex[callID] = wsNextIndex
-					wsNextIndex++
-				}
-				idx := wsIndex[callID]
-				if callID != "" && name != "" {
-					writeChunk(types.ChatCompletionChunk{
-						ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
-						Choices: []types.ChatChunkChoice{{
-							Index: 0,
-							Delta: types.ChatDelta{
-								ToolCalls: []types.ToolCall{{
-									Index: idx, ID: callID, Type: "function",
-									Function: types.FunctionCall{Name: name, Arguments: argsStr},
-								}},
-							},
-							FinishReason: nil,
-						}},
-					})
-					writeChunk(types.ChatCompletionChunk{
-						ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
-						Choices: []types.ChatChunkChoice{{Index: 0, Delta: types.ChatDelta{}, FinishReason: types.StringPtr("tool_calls")}},
-					})
-				}
-			}
+			st.handleOutputItemDone(evt.Data)
 
 		case "response.reasoning_summary_part.added":
-			if compat == "think-tags" || compat == "o3" {
-				if sawAnySummary {
-					pendingSummaryParagraph = true
+			if st.compat == "think-tags" || st.compat == "o3" {
+				if st.sawAnySummary {
+					st.pendingSummaryParagraph = true
 				} else {
-					sawAnySummary = true
+					st.sawAnySummary = true
 				}
 			}
 
 		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-			deltaTxt, _ := evt.Data["delta"].(string)
-			switch compat {
-			case "o3":
-				if kind == "response.reasoning_summary_text.delta" && pendingSummaryParagraph {
-					writeChunk(types.ChatCompletionChunk{
-						ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
-						Choices: []types.ChatChunkChoice{{
-							Index: 0,
-							Delta: types.ChatDelta{Reasoning: types.ReasoningContent{
-								Content: []types.ReasoningPart{{Type: "text", Text: "\n"}},
-							}},
-							FinishReason: nil,
-						}},
-					})
-					pendingSummaryParagraph = false
-				}
-				writeChunk(types.ChatCompletionChunk{
-					ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
-					Choices: []types.ChatChunkChoice{{
-						Index: 0,
-						Delta: types.ChatDelta{Reasoning: types.ReasoningContent{
-							Content: []types.ReasoningPart{{Type: "text", Text: deltaTxt}},
-						}},
-						FinishReason: nil,
-					}},
-				})
-
-			case "think-tags":
-				if !thinkOpen && !thinkClosed {
-					writeChunk(makeDelta(types.ChatDelta{Content: "<think>"}))
-					thinkOpen = true
-				}
-				if thinkOpen && !thinkClosed {
-					if kind == "response.reasoning_summary_text.delta" && pendingSummaryParagraph {
-						writeChunk(makeDelta(types.ChatDelta{Content: "\n"}))
-						pendingSummaryParagraph = false
-					}
-					writeChunk(makeDelta(types.ChatDelta{Content: deltaTxt}))
-				}
-
-			default: // legacy
-				if kind == "response.reasoning_summary_text.delta" {
-					writeChunk(types.ChatCompletionChunk{
-						ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
-						Choices: []types.ChatChunkChoice{{
-							Index:        0,
-							Delta:        types.ChatDelta{ReasoningSummary: deltaTxt, Reasoning: deltaTxt},
-							FinishReason: nil,
-						}},
-					})
-				} else {
-					writeChunk(types.ChatCompletionChunk{
-						ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
-						Choices: []types.ChatChunkChoice{{
-							Index: 0, Delta: types.ChatDelta{Reasoning: deltaTxt}, FinishReason: nil,
-						}},
-					})
-				}
-			}
+			st.handleReasoningDelta(kind, evt.Data)
 
 		case "response.output_text.done":
-			writeChunk(types.ChatCompletionChunk{
-				ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
+			st.writeChunk(types.ChatCompletionChunk{
+				ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
 				Choices: []types.ChatChunkChoice{{Index: 0, Delta: types.ChatDelta{}, FinishReason: types.StringPtr("stop")}},
 			})
-			sentStopChunk = true
+			st.sentStopChunk = true
 
 		case "response.failed":
 			errMsg := "response.failed"
@@ -276,80 +328,45 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 					}
 				}
 			}
-			writeChunk(types.ErrorResponse{Error: types.ErrorDetail{Message: errMsg}})
+			st.writeChunk(types.ErrorResponse{Error: types.ErrorDetail{Message: errMsg}})
 
 		case "response.completed":
-			upstreamUsage = extractUsage(evt.Data)
-			if compat == "think-tags" && thinkOpen && !thinkClosed {
-				writeChunk(makeDelta(types.ChatDelta{Content: "</think>"}))
-				thinkOpen = false
-				thinkClosed = true
+			st.upstreamUsage = types.ExtractUsageFromEvent(evt.Data)
+			if st.compat == "think-tags" && st.thinkOpen && !st.thinkClosed {
+				st.writeChunk(st.makeDelta(types.ChatDelta{Content: "</think>"}))
+				st.thinkOpen = false
+				st.thinkClosed = true
 			}
-			if !sentStopChunk {
-				writeChunk(types.ChatCompletionChunk{
-					ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
+			if !st.sentStopChunk {
+				st.writeChunk(types.ChatCompletionChunk{
+					ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
 					Choices: []types.ChatChunkChoice{{Index: 0, Delta: types.ChatDelta{}, FinishReason: types.StringPtr("stop")}},
 				})
-				sentStopChunk = true
+				st.sentStopChunk = true
 			}
-			if opts.IncludeUsage && upstreamUsage != nil {
-				writeChunk(types.ChatCompletionChunk{
-					ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
+			if st.opts.IncludeUsage && st.upstreamUsage != nil {
+				st.writeChunk(types.ChatCompletionChunk{
+					ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
 					Choices: []types.ChatChunkChoice{{Index: 0, Delta: types.ChatDelta{}, FinishReason: nil}},
-					Usage:   upstreamUsage,
+					Usage:   st.upstreamUsage,
 				})
 			}
-			writeDone()
+			st.writeDone()
 			return
 		}
 	}
 
 	// Stream ended without response.completed
-	if compat == "think-tags" && thinkOpen && !thinkClosed {
-		writeChunk(makeDelta(types.ChatDelta{Content: "</think>"}))
+	if st.compat == "think-tags" && st.thinkOpen && !st.thinkClosed {
+		st.writeChunk(st.makeDelta(types.ChatDelta{Content: "</think>"}))
 	}
-	if !sentStopChunk {
-		writeChunk(types.ChatCompletionChunk{
-			ID: responseID, Object: "chat.completion.chunk", Created: created, Model: model,
+	if !st.sentStopChunk {
+		st.writeChunk(types.ChatCompletionChunk{
+			ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
 			Choices: []types.ChatChunkChoice{{Index: 0, Delta: types.ChatDelta{}, FinishReason: types.StringPtr("stop")}},
 		})
 	}
-	writeDone()
-}
-
-func extractUsage(data map[string]any) *types.Usage {
-	resp, _ := data["response"].(map[string]any)
-	if resp == nil {
-		return nil
-	}
-	usage, _ := resp["usage"].(map[string]any)
-	if usage == nil {
-		return nil
-	}
-	pt := toInt(usage["input_tokens"])
-	ct := toInt(usage["output_tokens"])
-	tt := toInt(usage["total_tokens"])
-	if tt == 0 {
-		tt = pt + ct
-	}
-	return &types.Usage{
-		PromptTokens:     pt,
-		CompletionTokens: ct,
-		TotalTokens:      tt,
-	}
-}
-
-func toInt(v any) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	case json.Number:
-		i, _ := n.Int64()
-		return int(i)
-	}
-	return 0
+	st.writeDone()
 }
 
 func stringOr(m map[string]any, keys ...string) string {

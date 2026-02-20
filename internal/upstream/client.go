@@ -8,12 +8,20 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/n0madic/go-chatmock/internal/auth"
 	"github.com/n0madic/go-chatmock/internal/config"
 	"github.com/n0madic/go-chatmock/internal/session"
 	"github.com/n0madic/go-chatmock/internal/types"
 )
+
+// upstreamHTTPTimeout is the maximum time allowed for the upstream SSE request.
+// SSE streams can be long-lived, so we use a generous timeout.
+const upstreamHTTPTimeout = 5 * time.Minute
+
+// httpClient is the shared HTTP client for upstream requests with a timeout.
+var httpClient = &http.Client{Timeout: upstreamHTTPTimeout}
 
 // Request holds the parameters for an upstream Responses API request.
 type Request struct {
@@ -105,7 +113,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	httpReq.Header.Set("OpenAI-Beta", "responses=experimental")
 	httpReq.Header.Set("session_id", sessionID)
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("upstream ChatGPT request failed: %w", err)
 	}

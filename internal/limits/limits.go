@@ -81,7 +81,8 @@ func parseWindow(headers http.Header, usedKey, windowKey, resetKey string) *Rate
 	return w
 }
 
-func limitsPath() string {
+// limitsPath is a function variable so tests can override the path.
+var limitsPath = func() string {
 	return filepath.Join(auth.HomeDir(), limitsFilename)
 }
 

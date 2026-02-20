@@ -19,7 +19,7 @@ import (
 )
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Failed to read request body")
 		return
@@ -202,9 +202,9 @@ func (s *Server) collectResponsesResponse(w http.ResponseWriter, resp *upstream.
 			}
 			if u, ok := r["usage"].(map[string]any); ok {
 				usageObj = &types.ResponsesUsage{
-					InputTokens:  intFromAny(u["input_tokens"]),
-					OutputTokens: intFromAny(u["output_tokens"]),
-					TotalTokens:  intFromAny(u["total_tokens"]),
+					InputTokens:  types.IntFromAny(u["input_tokens"]),
+					OutputTokens: types.IntFromAny(u["output_tokens"]),
+					TotalTokens:  types.IntFromAny(u["total_tokens"]),
 				}
 				if usageObj.TotalTokens == 0 {
 					usageObj.TotalTokens = usageObj.InputTokens + usageObj.OutputTokens

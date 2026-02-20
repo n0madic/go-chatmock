@@ -95,7 +95,7 @@ func (s *Server) handleOllamaShow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Failed to read request body")
 		return
@@ -204,33 +204,10 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	limits.RecordFromResponse(resp.Headers)
 
 	if resp.StatusCode >= 400 {
-		if hadResponsesTools {
-			baseTools := transform.ToolsChatToResponses(normalizedTools)
-			upReq.Tools = baseTools
-			resp2, err2 := s.upstreamClient.Do(r.Context(), upReq)
-			if err2 == nil && resp2.StatusCode < 400 {
-				limits.RecordFromResponse(resp2.Headers)
-				resp.Body.Body.Close()
-				resp = resp2
-			} else {
-				resp.Body.Body.Close()
-				if err2 != nil {
-					writeOllamaError(w, http.StatusBadGateway, "Upstream retry failed after removing responses_tools: "+err2.Error())
-					return
-				}
-				if resp2 == nil {
-					writeOllamaError(w, http.StatusBadGateway, "Upstream retry failed after removing responses_tools: empty response")
-					return
-				}
-				errBody, _ := io.ReadAll(resp2.Body.Body)
-				resp2.Body.Body.Close()
-				writeOllamaError(w, resp2.StatusCode, formatUpstreamError(resp2.StatusCode, errBody))
-				return
-			}
-		} else {
-			errBody, _ := io.ReadAll(resp.Body.Body)
-			resp.Body.Body.Close()
-			writeOllamaError(w, resp.StatusCode, formatUpstreamError(resp.StatusCode, errBody))
+		baseTools := transform.ToolsChatToResponses(normalizedTools)
+		var ok bool
+		resp, ok = s.doWithRetry(r.Context(), w, resp, upReq, hadResponsesTools, baseTools, writeOllamaError)
+		if !ok {
 			return
 		}
 	}
@@ -332,33 +309,5 @@ ollamaDone:
 }
 
 func (s *Server) extractOllamaResponsesTools(rtPayload []any, rtChoice string) ([]types.ResponsesTool, bool) {
-	if rtPayload == nil {
-		if s.Config.DefaultWebSearch {
-			if rtChoice != "none" {
-				return []types.ResponsesTool{{Type: "web_search"}}, true
-			}
-		}
-		return nil, false
-	}
-
-	var extraTools []types.ResponsesTool
-	for _, t := range rtPayload {
-		tm, ok := t.(map[string]any)
-		if !ok {
-			continue
-		}
-		ttype, _ := tm["type"].(string)
-		if ttype != "web_search" && ttype != "web_search_preview" {
-			return nil, true // signal unsupported tool error
-		}
-		extraTools = append(extraTools, types.ResponsesTool{Type: ttype})
-	}
-
-	if len(extraTools) == 0 && s.Config.DefaultWebSearch {
-		if rtChoice != "none" {
-			extraTools = []types.ResponsesTool{{Type: "web_search"}}
-		}
-	}
-
-	return extraTools, len(extraTools) > 0
+	return s.extractResponsesTools(rtPayload, rtChoice)
 }

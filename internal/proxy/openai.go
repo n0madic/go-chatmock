@@ -18,7 +18,7 @@ import (
 )
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Failed to read request body")
 		return
@@ -133,34 +133,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	limits.RecordFromResponse(resp.Headers)
 
 	if resp.StatusCode >= 400 {
-		if hadResponsesTools {
-			// Retry without extra tools
-			baseTools := transform.ToolsChatToResponses(req.Tools)
-			upReq.Tools = baseTools
-			resp2, err2 := s.upstreamClient.Do(r.Context(), upReq)
-			if err2 == nil && resp2.StatusCode < 400 {
-				limits.RecordFromResponse(resp2.Headers)
-				resp.Body.Body.Close()
-				resp = resp2
-			} else {
-				resp.Body.Body.Close()
-				if err2 != nil {
-					writeError(w, http.StatusBadGateway, "Upstream retry failed after removing responses_tools: "+err2.Error())
-					return
-				}
-				if resp2 == nil {
-					writeError(w, http.StatusBadGateway, "Upstream retry failed after removing responses_tools: empty response")
-					return
-				}
-				errBody, _ := io.ReadAll(resp2.Body.Body)
-				resp2.Body.Body.Close()
-				writeError(w, resp2.StatusCode, formatUpstreamError(resp2.StatusCode, errBody))
-				return
-			}
-		} else {
-			errBody, _ := io.ReadAll(resp.Body.Body)
-			resp.Body.Body.Close()
-			writeError(w, resp.StatusCode, formatUpstreamError(resp.StatusCode, errBody))
+		baseTools := transform.ToolsChatToResponses(req.Tools)
+		var ok bool
+		resp, ok = s.doWithRetry(r.Context(), w, resp, upReq, hadResponsesTools, baseTools, writeError)
+		if !ok {
 			return
 		}
 	}
@@ -212,7 +188,7 @@ func (s *Server) collectChatCompletion(w http.ResponseWriter, resp *upstream.Res
 			}
 		}
 
-		usageData := extractUsageFromEvent(evt.Data)
+		usageData := types.ExtractUsageFromEvent(evt.Data)
 		if usageData != nil {
 			usageObj = usageData
 		}
@@ -284,7 +260,7 @@ done:
 }
 
 func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Failed to read request body")
 		return
@@ -400,7 +376,7 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 				responseID = id
 			}
 		}
-		if u := extractUsageFromEvent(evt.Data); u != nil {
+		if u := types.ExtractUsageFromEvent(evt.Data); u != nil {
 			usageObj = u
 		}
 		switch evt.Type {
@@ -479,28 +455,6 @@ func (s *Server) extractResponsesTools(responsesTools []any, responsesToolChoice
 	return extraTools, len(extraTools) > 0
 }
 
-func extractUsageFromEvent(data map[string]any) *types.Usage {
-	resp, _ := data["response"].(map[string]any)
-	if resp == nil {
-		return nil
-	}
-	usage, _ := resp["usage"].(map[string]any)
-	if usage == nil {
-		return nil
-	}
-	pt := intFromAny(usage["input_tokens"])
-	ct := intFromAny(usage["output_tokens"])
-	tt := intFromAny(usage["total_tokens"])
-	if tt == 0 {
-		tt = pt + ct
-	}
-	return &types.Usage{
-		PromptTokens:     pt,
-		CompletionTokens: ct,
-		TotalTokens:      tt,
-	}
-}
-
 func convertSystemToUser(messages []types.ChatMessage) {
 	for i, m := range messages {
 		if m.Role == "system" {
@@ -513,16 +467,6 @@ func convertSystemToUser(messages []types.ChatMessage) {
 			return
 		}
 	}
-}
-
-func intFromAny(v any) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	}
-	return 0
 }
 
 func boolVal(m map[string]any, key string) bool {
