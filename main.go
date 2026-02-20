@@ -574,10 +574,7 @@ func formatResetDuration(seconds *int) string {
 	if seconds == nil {
 		return ""
 	}
-	v := *seconds
-	if v < 0 {
-		v = 0
-	}
+	v := max(*seconds, 0)
 	days := v / 86400
 	v %= 86400
 	hours := v / 3600

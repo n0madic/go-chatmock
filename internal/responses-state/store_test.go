@@ -165,7 +165,7 @@ func TestStoreConcurrentAccess(t *testing.T) {
 	s := NewStore(5*time.Minute, 1000)
 	var wg sync.WaitGroup
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

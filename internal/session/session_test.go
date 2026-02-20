@@ -111,7 +111,7 @@ func TestLRUEvictionAtMaxEntries(t *testing.T) {
 func TestCacheGrowsOnNewEntries(t *testing.T) {
 	resetCache()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		EnsureSessionID(fmt.Sprintf("unique-%d", i), nil, "")
 	}
 

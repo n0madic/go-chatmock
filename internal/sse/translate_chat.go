@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -119,9 +120,7 @@ func (st *chatTranslatorState) handleOutputItemDone(data map[string]any) {
 		if _, ok := st.wsState[callID]; !ok {
 			st.wsState[callID] = map[string]any{}
 		}
-		for k, v := range argsMap {
-			st.wsState[callID][k] = v
-		}
+		maps.Copy(st.wsState[callID], argsMap)
 	}
 
 	effArgs := st.wsState[callID]
@@ -401,9 +400,7 @@ func serializeToolArgs(args any) string {
 func mergeWebSearchParams(dst map[string]any, src map[string]any) {
 	for _, key := range []string{"parameters", "args", "arguments", "input"} {
 		if params, ok := src[key].(map[string]any); ok {
-			for k, v := range params {
-				dst[k] = v
-			}
+			maps.Copy(dst, params)
 		}
 	}
 	if q, ok := src["query"].(string); ok {

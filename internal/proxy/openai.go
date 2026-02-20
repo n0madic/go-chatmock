@@ -168,9 +168,9 @@ func (s *Server) collectChatCompletion(w http.ResponseWriter, resp *upstream.Res
 	defer resp.Body.Body.Close()
 
 	reader := sse.NewReader(resp.Body.Body)
-	var fullText string
-	var reasoningSummaryText string
-	var reasoningFullText string
+	var fullText strings.Builder
+	var reasoningSummaryText strings.Builder
+	var reasoningFullText strings.Builder
 	responseID := "chatcmpl"
 	var toolCalls []types.ToolCall
 	var errorMessage string
@@ -196,13 +196,13 @@ func (s *Server) collectChatCompletion(w http.ResponseWriter, resp *upstream.Res
 		switch evt.Type {
 		case "response.output_text.delta":
 			delta, _ := evt.Data["delta"].(string)
-			fullText += delta
+			fullText.WriteString(delta)
 		case "response.reasoning_summary_text.delta":
 			delta, _ := evt.Data["delta"].(string)
-			reasoningSummaryText += delta
+			reasoningSummaryText.WriteString(delta)
 		case "response.reasoning_text.delta":
 			delta, _ := evt.Data["delta"].(string)
-			reasoningFullText += delta
+			reasoningFullText.WriteString(delta)
 		case "response.output_item.done":
 			item, _ := evt.Data["item"].(map[string]any)
 			if itemType, _ := item["type"].(string); itemType == "function_call" {
@@ -239,11 +239,11 @@ done:
 		return
 	}
 
-	message := types.ChatResponseMsg{Role: "assistant", Content: fullText}
+	message := types.ChatResponseMsg{Role: "assistant", Content: fullText.String()}
 	if len(toolCalls) > 0 {
 		message.ToolCalls = toolCalls
 	}
-	reasoning.ApplyReasoningToMessage(&message, reasoningSummaryText, reasoningFullText, s.Config.ReasoningCompat)
+	reasoning.ApplyReasoningToMessage(&message, reasoningSummaryText.String(), reasoningFullText.String(), s.Config.ReasoningCompat)
 
 	completion := types.ChatCompletionResponse{
 		ID:      responseID,
@@ -362,7 +362,7 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 	// Non-streaming
 	defer resp.Body.Body.Close()
 	reader := sse.NewReader(resp.Body.Body)
-	var fullText string
+	var fullText strings.Builder
 	responseID := "cmpl"
 	var usageObj *types.Usage
 
@@ -382,7 +382,7 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 		switch evt.Type {
 		case "response.output_text.delta":
 			delta, _ := evt.Data["delta"].(string)
-			fullText += delta
+			fullText.WriteString(delta)
 		case "response.completed":
 			goto textDone
 		}
@@ -395,7 +395,7 @@ textDone:
 		Created: created,
 		Model:   outputModel,
 		Choices: []types.TextChoice{
-			{Index: 0, Text: fullText, FinishReason: types.StringPtr("stop"), Logprobs: nil},
+			{Index: 0, Text: fullText.String(), FinishReason: types.StringPtr("stop"), Logprobs: nil},
 		},
 		Usage: usageObj,
 	}

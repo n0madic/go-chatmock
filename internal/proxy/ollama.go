@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/n0madic/go-chatmock/internal/config"
@@ -285,14 +286,14 @@ ollamaDone:
 			parts = append(parts, reasoningFullText)
 		}
 		if len(parts) > 0 {
-			rtxt := ""
+			var rtxt strings.Builder
 			for i, p := range parts {
 				if i > 0 {
-					rtxt += "\n\n"
+					rtxt.WriteString("\n\n")
 				}
-				rtxt += p
+				rtxt.WriteString(p)
 			}
-			fullText = "<think>" + rtxt + "</think>" + fullText
+			fullText = "<think>" + rtxt.String() + "</think>" + fullText
 		}
 	}
 
