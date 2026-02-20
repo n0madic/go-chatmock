@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -69,5 +70,20 @@ func TestFormatUpstreamError(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFormatUpstreamErrorWithHeaders(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("x-request-id", "req_123")
+
+	got := formatUpstreamErrorWithHeaders(http.StatusBadRequest, []byte(``), headers)
+	if !strings.Contains(got, "request_id: req_123") {
+		t.Fatalf("expected request id in message, got %q", got)
+	}
+
+	gotNoHeader := formatUpstreamErrorWithHeaders(http.StatusBadRequest, []byte(``), nil)
+	if strings.Contains(gotNoHeader, "request_id:") {
+		t.Fatalf("did not expect request id without headers, got %q", gotNoHeader)
 	}
 }

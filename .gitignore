@@ -1,2 +1,5 @@
 go-chatmock
 AGENTS.md
+*.log
+*.py
+*.pyc

@@ -403,6 +403,11 @@ textDone:
 }
 
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+	if isAnthropicRequest(r) {
+		s.handleListModelsAnthropic(w, r)
+		return
+	}
+
 	mods := s.Registry.GetModels()
 	var data []types.ModelObject
 	for _, m := range mods {

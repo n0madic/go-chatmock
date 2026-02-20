@@ -26,6 +26,24 @@ func formatUpstreamError(statusCode int, rawBody []byte) string {
 	return fmt.Sprintf("Upstream returned HTTP %s with empty error body", status)
 }
 
+func formatUpstreamErrorWithHeaders(statusCode int, rawBody []byte, headers http.Header) string {
+	msg := formatUpstreamError(statusCode, rawBody)
+	if headers == nil {
+		return msg
+	}
+	reqID := strings.TrimSpace(headers.Get("x-request-id"))
+	if reqID == "" {
+		reqID = strings.TrimSpace(headers.Get("x-openai-request-id"))
+	}
+	if reqID == "" {
+		reqID = strings.TrimSpace(headers.Get("cf-ray"))
+	}
+	if reqID == "" {
+		return msg
+	}
+	return fmt.Sprintf("%s (request_id: %s)", msg, reqID)
+}
+
 func extractUpstreamErrorMessage(rawBody []byte) string {
 	trimmed := strings.TrimSpace(string(rawBody))
 	if trimmed == "" {

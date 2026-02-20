@@ -68,7 +68,8 @@ func DefaultFromEnv() *ServerConfig {
 func (c *ServerConfig) InstructionsForModel(model string) string {
 	if strings.HasPrefix(model, "gpt-5-codex") ||
 		strings.HasPrefix(model, "gpt-5.1-codex") ||
-		strings.HasPrefix(model, "gpt-5.2-codex") {
+		strings.HasPrefix(model, "gpt-5.2-codex") ||
+		strings.HasPrefix(model, "gpt-5.3-codex") {
 		if c.CodexInstructions != "" {
 			return c.CodexInstructions
 		}

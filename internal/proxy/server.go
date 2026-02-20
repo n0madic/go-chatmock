@@ -52,6 +52,10 @@ func New(cfg *config.ServerConfig) *Server {
 	mux.HandleFunc("GET /v1/models", s.handleListModels)
 	mux.HandleFunc("POST /v1/responses", s.handleResponses)
 
+	// Anthropic-compatible routes (Claude Code gateway)
+	mux.HandleFunc("POST /v1/messages", s.handleAnthropicMessages)
+	mux.HandleFunc("POST /v1/messages/count_tokens", s.handleAnthropicCountTokens)
+
 	// Ollama-compatible routes
 	mux.HandleFunc("POST /api/chat", s.handleOllamaChat)
 	mux.HandleFunc("GET /api/tags", s.handleOllamaTags)

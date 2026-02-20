@@ -97,6 +97,14 @@ All flags can also be set via environment variables:
 | `POST` | `/v1/responses` | Responses API (streaming and non-streaming) |
 | `GET` | `/v1/models` | List available models |
 
+### Anthropic-compatible (Claude Code gateway)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/v1/messages` | Anthropic Messages API (streaming and non-streaming) |
+| `POST` | `/v1/messages/count_tokens` | Approximate local token count |
+| `GET` | `/v1/models` | Anthropic model list schema when `anthropic-version` header is present |
+
 ### Ollama-compatible
 
 | Method | Path | Description |
@@ -146,6 +154,7 @@ The `Authorization` header value is ignored — authentication uses the stored C
 ## Features
 
 - **Streaming and non-streaming** responses for both OpenAI and Ollama formats
+- **Anthropic Messages API gateway** for Claude Code (`/v1/messages`, `/v1/messages/count_tokens`, `/v1/models` dual schema)
 - **Responses API support** (`/v1/responses`) including local tool-loop continuity
 - **Tool/function calling** support with automatic format translation
 - **Vision/image** support (base64 images in Ollama format are converted automatically)
@@ -160,6 +169,12 @@ The `Authorization` header value is ignored — authentication uses the stored C
 - **Automatic token refresh** with thread-safe management
 - **Rate limit tracking** — usage snapshots saved to `~/.chatgpt-local/usage_limits.json`, viewable via `info`
 - **CORS** enabled for all origins
+
+For Anthropic-compatible routes, include:
+
+- `anthropic-version: 2023-06-01` (required)
+- auth header (required; validated only for presence):
+  `x-api-key: <any non-empty value>` or `Authorization: Bearer <token>`
 
 `previous_response_id` is handled locally and not forwarded upstream. The in-memory
 state is cleared on process restart. If a tool loop references an unknown/expired
