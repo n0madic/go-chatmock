@@ -181,35 +181,46 @@ func cmdServe() int {
 
 func cmdInfo() int {
 	fs := flag.NewFlagSet("info", flag.ExitOnError)
-	jsonOut := fs.Bool("json", false, "Output raw auth.json contents")
+	jsonOut := fs.Bool("json", false, "Output service info as JSON")
 	fs.Parse(os.Args[2:])
 
-	af, err := auth.ReadAuthFile()
+	af, _ := auth.ReadAuthFile()
+	tm := auth.NewTokenManager(config.ClientID(), config.TokenURL())
+	out := buildInfoOutput(af, tm)
+
 	if *jsonOut {
-		if err != nil {
-			fmt.Println("{}")
-		} else {
-			data, _ := json.MarshalIndent(af, "", "  ")
-			fmt.Println(string(data))
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(out); err != nil {
+			slog.Error("failed to encode JSON output", "error", err)
+			return 1
 		}
 		return 0
 	}
 
-	tm := auth.NewTokenManager(config.ClientID(), config.TokenURL())
-	accessToken, accountID, tokenErr := tm.GetEffectiveAuth()
+	printInfoText(out)
+	return 0
+}
 
+func buildInfoOutput(af *auth.AuthFile, tm *auth.TokenManager) infoOutput {
+	out := infoOutput{
+		UsageLimits: buildUsageLimits(),
+	}
+
+	accessToken, accountID, tokenErr := tm.GetEffectiveAuth()
 	var idToken string
 	if af != nil {
 		idToken = af.Tokens.IDToken
 	}
+	signedIn := tokenErr == nil && accessToken != "" && idToken != ""
 
-	if tokenErr != nil || accessToken == "" || idToken == "" {
-		fmt.Println("\U0001F464 Account")
-		fmt.Println("  \u2022 Not signed in")
-		fmt.Println("  \u2022 Run: go-chatmock login")
-		fmt.Println()
-		printUsageLimits()
-		return 0
+	if !signedIn {
+		out.Account = infoAccount{
+			SignedIn: false,
+			Message:  "Not signed in",
+			Hint:     "Run: go-chatmock login",
+		}
+		return out
 	}
 
 	idClaims, _ := auth.ParseJWTClaims(idToken)
@@ -240,38 +251,203 @@ func cmdInfo() int {
 		plan = "Unknown"
 	}
 
-	fmt.Println("\U0001F464 Account")
-	fmt.Println("  \u2022 Signed in with ChatGPT")
-	fmt.Printf("  \u2022 Login: %s\n", email)
-	fmt.Printf("  \u2022 Plan: %s\n", plan)
-	if accountID != "" {
-		fmt.Printf("  \u2022 Account ID: %s\n", accountID)
+	out.Account = infoAccount{
+		SignedIn:  true,
+		Provider:  "ChatGPT",
+		Login:     email,
+		Plan:      plan,
+		AccountID: accountID,
 	}
-	fmt.Println()
-
-	printAvailableModels(tm)
-	printUsageLimits()
-	return 0
+	out.AvailableModels = buildModels(tm)
+	return out
 }
 
-func printAvailableModels(tm *auth.TokenManager) {
-	fmt.Println("\U0001F916 Available Models")
+type infoOutput struct {
+	Account         infoAccount     `json:"account"`
+	AvailableModels *infoModels     `json:"available_models,omitempty"`
+	UsageLimits     infoUsageLimits `json:"usage_limits"`
+}
 
+type infoAccount struct {
+	SignedIn  bool   `json:"signed_in"`
+	Provider  string `json:"provider,omitempty"`
+	Login     string `json:"login,omitempty"`
+	Plan      string `json:"plan,omitempty"`
+	AccountID string `json:"account_id,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Hint      string `json:"hint,omitempty"`
+}
+
+type infoModels struct {
+	Live    bool        `json:"live"`
+	Message string      `json:"message,omitempty"`
+	Models  []infoModel `json:"models"`
+}
+
+type infoModel struct {
+	Slug             string   `json:"slug"`
+	Description      string   `json:"description,omitempty"`
+	ReasoningEfforts []string `json:"reasoning_efforts,omitempty"`
+}
+
+type infoUsageLimits struct {
+	LastUpdated        string            `json:"last_updated,omitempty"`
+	LastUpdatedRFC3339 string            `json:"last_updated_rfc3339,omitempty"`
+	Message            string            `json:"message,omitempty"`
+	Windows            []infoUsageWindow `json:"windows,omitempty"`
+}
+
+type infoUsageWindow struct {
+	Key              string  `json:"key"`
+	Label            string  `json:"label"`
+	UsedPercent      float64 `json:"used_percent"`
+	RemainingPercent float64 `json:"remaining_percent"`
+	WindowMinutes    *int    `json:"window_minutes,omitempty"`
+	ResetsInSeconds  *int    `json:"resets_in_seconds,omitempty"`
+	ResetsIn         string  `json:"resets_in,omitempty"`
+	ResetsAt         string  `json:"resets_at,omitempty"`
+	ResetsAtRFC3339  string  `json:"resets_at_rfc3339,omitempty"`
+}
+
+func buildModels(tm *auth.TokenManager) *infoModels {
 	reg := models.NewRegistry(tm)
 	mods := reg.GetModels()
 	isLive := reg.IsPopulated()
 
+	out := &infoModels{
+		Live: isLive,
+	}
 	if !isLive {
-		fmt.Println("  (could not fetch from API, showing static list)")
+		out.Message = "could not fetch from API, showing static list"
 	}
 
 	for _, m := range mods {
 		if m.Visibility == "hidden" {
 			continue
 		}
-		var efforts []string
+		item := infoModel{
+			Slug:        m.Slug,
+			Description: m.Description,
+		}
 		for _, lvl := range m.SupportedReasoningLevels {
-			efforts = append(efforts, lvl.Effort)
+			item.ReasoningEfforts = append(item.ReasoningEfforts, lvl.Effort)
+		}
+		out.Models = append(out.Models, item)
+	}
+
+	return out
+}
+
+func buildUsageLimits() infoUsageLimits {
+	stored := limits.LoadSnapshot()
+	if stored == nil {
+		return infoUsageLimits{
+			Message: "No usage data available yet. Send a request through ChatMock first.",
+		}
+	}
+
+	out := infoUsageLimits{
+		LastUpdated:        formatLocalDateTime(stored.CapturedAt),
+		LastUpdatedRFC3339: stored.CapturedAt.UTC().Format(time.RFC3339),
+	}
+
+	type windowInfo struct {
+		key    string
+		desc   string
+		window *limits.RateLimitWindow
+	}
+	var windows []windowInfo
+	if stored.Snapshot.Primary != nil {
+		windows = append(windows, windowInfo{key: "primary", desc: "5 hour limit", window: stored.Snapshot.Primary})
+	}
+	if stored.Snapshot.Secondary != nil {
+		windows = append(windows, windowInfo{key: "secondary", desc: "Weekly limit", window: stored.Snapshot.Secondary})
+	}
+
+	if len(windows) == 0 {
+		out.Message = "Usage data was captured but no limit windows were provided."
+		return out
+	}
+
+	for _, wi := range windows {
+		pct := clampPercent(wi.window.UsedPercent)
+		remaining := 100.0 - pct
+		if remaining < 0 {
+			remaining = 0
+		}
+		w := infoUsageWindow{
+			Key:              wi.key,
+			Label:            wi.desc,
+			UsedPercent:      pct,
+			RemainingPercent: remaining,
+			WindowMinutes:    wi.window.WindowMinutes,
+			ResetsInSeconds:  wi.window.ResetsInSeconds,
+			ResetsIn:         formatResetDuration(wi.window.ResetsInSeconds),
+		}
+		if resetAt := limits.ComputeResetAt(stored.CapturedAt, wi.window); resetAt != nil {
+			w.ResetsAt = formatLocalDateTime(*resetAt)
+			w.ResetsAtRFC3339 = resetAt.UTC().Format(time.RFC3339)
+		}
+		out.Windows = append(out.Windows, w)
+	}
+
+	return out
+}
+
+func printInfoText(out infoOutput) {
+	fmt.Println("\U0001F464 Account")
+	if !out.Account.SignedIn {
+		msg := out.Account.Message
+		if msg == "" {
+			msg = "Not signed in"
+		}
+		fmt.Printf("  \u2022 %s\n", msg)
+		if out.Account.Hint != "" {
+			fmt.Printf("  \u2022 %s\n", out.Account.Hint)
+		}
+		fmt.Println()
+		printUsageLimitsText(out.UsageLimits)
+		return
+	}
+
+	provider := out.Account.Provider
+	if provider == "" {
+		provider = "ChatGPT"
+	}
+	fmt.Printf("  \u2022 Signed in with %s\n", provider)
+	if out.Account.Login != "" {
+		fmt.Printf("  \u2022 Login: %s\n", out.Account.Login)
+	}
+	if out.Account.Plan != "" {
+		fmt.Printf("  \u2022 Plan: %s\n", out.Account.Plan)
+	}
+	if out.Account.AccountID != "" {
+		fmt.Printf("  \u2022 Account ID: %s\n", out.Account.AccountID)
+	}
+	fmt.Println()
+
+	printAvailableModelsText(out.AvailableModels)
+	printUsageLimitsText(out.UsageLimits)
+}
+
+func printAvailableModelsText(modelsInfo *infoModels) {
+	if modelsInfo == nil {
+		return
+	}
+
+	fmt.Println("\U0001F916 Available Models")
+	if !modelsInfo.Live {
+		msg := modelsInfo.Message
+		if msg == "" {
+			msg = "could not fetch from API, showing static list"
+		}
+		fmt.Printf("  (%s)\n", msg)
+	}
+
+	for _, m := range modelsInfo.Models {
+		var efforts []string
+		for _, effort := range m.ReasoningEfforts {
+			efforts = append(efforts, effort)
 		}
 		line := fmt.Sprintf("  \u2022 %-28s", m.Slug)
 		if m.Description != "" {
@@ -285,44 +461,26 @@ func printAvailableModels(tm *auth.TokenManager) {
 	fmt.Println()
 }
 
-func printUsageLimits() {
+func printUsageLimitsText(usage infoUsageLimits) {
 	fmt.Println("\U0001F4CA Usage Limits")
-
-	stored := limits.LoadSnapshot()
-	if stored == nil {
-		fmt.Println("  No usage data available yet. Send a request through ChatMock first.")
+	if usage.LastUpdated != "" {
+		fmt.Printf("Last updated: %s\n", usage.LastUpdated)
+		fmt.Println()
+	}
+	if len(usage.Windows) == 0 {
+		if usage.Message != "" {
+			fmt.Printf("  %s\n", usage.Message)
+		}
 		fmt.Println()
 		return
 	}
 
-	fmt.Printf("Last updated: %s\n", formatLocalDateTime(stored.CapturedAt))
-	fmt.Println()
-
-	type windowInfo struct {
-		icon   string
-		desc   string
-		window *limits.RateLimitWindow
-	}
-	var windows []windowInfo
-	if stored.Snapshot.Primary != nil {
-		windows = append(windows, windowInfo{"\u26A1", "5 hour limit", stored.Snapshot.Primary})
-	}
-	if stored.Snapshot.Secondary != nil {
-		windows = append(windows, windowInfo{"\U0001F4C5", "Weekly limit", stored.Snapshot.Secondary})
-	}
-
-	if len(windows) == 0 {
-		fmt.Println("  Usage data was captured but no limit windows were provided.")
-		fmt.Println()
-		return
-	}
-
-	for i, wi := range windows {
+	for i, w := range usage.Windows {
 		if i > 0 {
 			fmt.Println()
 		}
-		pct := clampPercent(wi.window.UsedPercent)
-		remaining := 100.0 - pct
+		pct := clampPercent(w.UsedPercent)
+		remaining := w.RemainingPercent
 		if remaining < 0 {
 			remaining = 0
 		}
@@ -330,21 +488,29 @@ func printUsageLimits() {
 		reset := "\033[0m"
 		bar := renderProgressBar(pct)
 
-		fmt.Printf("%s %s\n", wi.icon, wi.desc)
+		fmt.Printf("%s %s\n", usageWindowIcon(w.Key), w.Label)
 		fmt.Printf("%s%s%s %s%5.1f%% used%s | %5.1f%% left\n", color, bar, reset, color, pct, reset, remaining)
 
-		resetIn := formatResetDuration(wi.window.ResetsInSeconds)
-		resetAt := limits.ComputeResetAt(stored.CapturedAt, wi.window)
-
-		if resetIn != "" && resetAt != nil {
-			fmt.Printf("    \u23F3 Resets in: %s at %s\n", resetIn, formatLocalDateTime(*resetAt))
-		} else if resetIn != "" {
-			fmt.Printf("    \u23F3 Resets in: %s\n", resetIn)
-		} else if resetAt != nil {
-			fmt.Printf("    \u23F3 Resets at: %s\n", formatLocalDateTime(*resetAt))
+		if w.ResetsIn != "" && w.ResetsAt != "" {
+			fmt.Printf("    \u23F3 Resets in: %s at %s\n", w.ResetsIn, w.ResetsAt)
+		} else if w.ResetsIn != "" {
+			fmt.Printf("    \u23F3 Resets in: %s\n", w.ResetsIn)
+		} else if w.ResetsAt != "" {
+			fmt.Printf("    \u23F3 Resets at: %s\n", w.ResetsAt)
 		}
 	}
 	fmt.Println()
+}
+
+func usageWindowIcon(key string) string {
+	switch key {
+	case "primary":
+		return "\u26A1"
+	case "secondary":
+		return "\U0001F4C5"
+	default:
+		return "\u2022"
+	}
 }
 
 const barSegments = 30
