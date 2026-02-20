@@ -10,6 +10,7 @@ import (
 	"github.com/n0madic/go-chatmock/internal/auth"
 	"github.com/n0madic/go-chatmock/internal/config"
 	"github.com/n0madic/go-chatmock/internal/models"
+	"github.com/n0madic/go-chatmock/internal/responses-state"
 	"github.com/n0madic/go-chatmock/internal/upstream"
 )
 
@@ -19,6 +20,7 @@ type Server struct {
 	httpServer     *http.Server
 	upstreamClient *upstream.Client
 	Registry       *models.Registry
+	responsesState *responsesstate.Store
 }
 
 // New creates a new proxy server with all routes registered.
@@ -31,6 +33,7 @@ func New(cfg *config.ServerConfig) *Server {
 		Config:         cfg,
 		upstreamClient: uc,
 		Registry:       reg,
+		responsesState: responsesstate.NewStore(responsesstate.DefaultTTL, responsesstate.DefaultCapacity),
 	}
 
 	// Pre-fetch available models in background so the registry is ready for

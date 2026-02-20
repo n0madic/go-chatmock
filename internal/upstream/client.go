@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/n0madic/go-chatmock/internal/auth"
 	"github.com/n0madic/go-chatmock/internal/config"
@@ -22,6 +23,8 @@ type Request struct {
 	Tools             []types.ResponsesTool
 	ToolChoice        any
 	ParallelToolCalls bool
+	Include           []string
+	Store             *bool
 	ReasoningParam    *types.ReasoningParam
 	SessionID         string // Client-supplied session ID override
 }
@@ -53,11 +56,6 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 
 	sessionID := session.EnsureSessionID(req.Instructions, req.InputItems, req.SessionID)
 
-	var include []string
-	if req.ReasoningParam != nil {
-		include = append(include, "reasoning.encrypted_content")
-	}
-
 	toolChoice := req.ToolChoice
 	switch tc := toolChoice.(type) {
 	case string:
@@ -77,13 +75,11 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 		Tools:             req.Tools,
 		ToolChoice:        toolChoice,
 		ParallelToolCalls: req.ParallelToolCalls,
-		Store:             false,
+		Store:             req.Store,
 		Stream:            true,
 		PromptCacheKey:    sessionID,
 	}
-	if len(include) > 0 {
-		payload.Include = include
-	}
+	payload.Include = mergeIncludes(req.Include, req.ReasoningParam != nil)
 	if req.ReasoningParam != nil {
 		payload.Reasoning = req.ReasoningParam
 	}
@@ -128,4 +124,30 @@ func logJSON(prefix string, v any) {
 		return
 	}
 	slog.Info(prefix + "\n" + string(data))
+}
+
+func mergeIncludes(clientInclude []string, includeReasoning bool) []string {
+	var merged []string
+	seen := make(map[string]struct{})
+
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		merged = append(merged, v)
+	}
+
+	for _, v := range clientInclude {
+		add(v)
+	}
+	if includeReasoning {
+		add("reasoning.encrypted_content")
+	}
+
+	return merged
 }

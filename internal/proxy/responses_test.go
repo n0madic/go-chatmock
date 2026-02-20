@@ -6,7 +6,7 @@ import (
 	"github.com/n0madic/go-chatmock/internal/types"
 )
 
-func TestNormalizeResponsesSystemToUser(t *testing.T) {
+func TestMoveResponsesSystemMessagesToInstructions(t *testing.T) {
 	items := []types.ResponsesInputItem{
 		{
 			Type:    "message",
@@ -19,28 +19,44 @@ func TestNormalizeResponsesSystemToUser(t *testing.T) {
 			Content: []types.ResponsesContent{{Type: "input_text", Text: "Check this code"}},
 		},
 		{
-			Type:   "function_call_output",
-			Role:   "system",
-			Output: "tool output",
-		},
-		{
 			Role:    "system",
 			Content: []types.ResponsesContent{{Type: "input_text", Text: "No type provided"}},
 		},
 	}
 
-	normalizeResponsesSystemToUser(items)
+	gotItems, instructions := moveResponsesSystemMessagesToInstructions(items)
 
-	if items[0].Role != "user" {
-		t.Fatalf("expected first item role to be user, got %q", items[0].Role)
+	if instructions != "You are a strict reviewer\n\nNo type provided" {
+		t.Fatalf("unexpected instructions: %q", instructions)
 	}
-	if items[1].Role != "user" {
-		t.Fatalf("expected second item role to stay user, got %q", items[1].Role)
+	if len(gotItems) != 1 {
+		t.Fatalf("expected only non-system item in input, got %d", len(gotItems))
 	}
-	if items[2].Role != "system" {
-		t.Fatalf("expected non-message item role to stay system, got %q", items[2].Role)
+	if gotItems[0].Role != "user" {
+		t.Fatalf("expected remaining item role=user, got %q", gotItems[0].Role)
 	}
-	if items[3].Role != "user" {
-		t.Fatalf("expected empty-type system message role to be user, got %q", items[3].Role)
+}
+
+func TestMoveResponsesSystemMessagesToInstructionsKeepsNonTextAsUser(t *testing.T) {
+	items := []types.ResponsesInputItem{
+		{
+			Type: "message",
+			Role: "system",
+			Content: []types.ResponsesContent{
+				{Type: "input_image", ImageURL: "https://example.com/image.png"},
+			},
+		},
+	}
+
+	gotItems, instructions := moveResponsesSystemMessagesToInstructions(items)
+
+	if instructions != "" {
+		t.Fatalf("expected empty instructions, got %q", instructions)
+	}
+	if len(gotItems) != 1 {
+		t.Fatalf("expected one item, got %d", len(gotItems))
+	}
+	if gotItems[0].Role != "user" {
+		t.Fatalf("expected role converted to user, got %q", gotItems[0].Role)
 	}
 }

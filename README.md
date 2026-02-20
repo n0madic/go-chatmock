@@ -94,6 +94,7 @@ All flags can also be set via environment variables:
 |--------|------|-------------|
 | `POST` | `/v1/chat/completions` | Chat completions (streaming and non-streaming) |
 | `POST` | `/v1/completions` | Text completions |
+| `POST` | `/v1/responses` | Responses API (streaming and non-streaming) |
 | `GET` | `/v1/models` | List available models |
 
 ### Ollama-compatible
@@ -145,15 +146,28 @@ The `Authorization` header value is ignored — authentication uses the stored C
 ## Features
 
 - **Streaming and non-streaming** responses for both OpenAI and Ollama formats
+- **Responses API support** (`/v1/responses`) including local tool-loop continuity
 - **Tool/function calling** support with automatic format translation
 - **Vision/image** support (base64 images in Ollama format are converted automatically)
 - **Reasoning effort** control per-request or globally via server flags
 - **Reasoning summaries** in three compat modes: `think-tags` (wrapped in `<think>` tags), `o3` (structured reasoning object), `legacy` (separate fields)
 - **Web search** passthrough via `responses_tools` field
 - **Session-based prompt caching** using deterministic SHA256 fingerprints
+- **Local `previous_response_id` polyfill** for `/v1/responses` tool loops:
+  go-chatmock stores reconstructed input context and tool calls in memory
+  (TTL 30 minutes, max 10k responses), replays prior context for chained turns,
+  and re-injects missing `function_call` items when clients send only `function_call_output`
 - **Automatic token refresh** with thread-safe management
 - **Rate limit tracking** — usage snapshots saved to `~/.chatgpt-local/usage_limits.json`, viewable via `info`
 - **CORS** enabled for all origins
+
+`previous_response_id` is handled locally and not forwarded upstream. The in-memory
+state is cleared on process restart. If a tool loop references an unknown/expired
+response ID or missing `call_id`, the proxy returns a descriptive `400` error.
+
+For `/v1/responses`, client `instructions` are passed through as-is, inherited across
+`previous_response_id` chains, and text-only `input` messages with `role: "system"`
+are moved into `instructions` for upstream compatibility.
 
 ## Architecture
 
@@ -166,6 +180,7 @@ internal/
   oauth/                   OAuth callback server (port 1455), PKCE via golang.org/x/oauth2
   proxy/                   HTTP server, CORS middleware, OpenAI + Ollama route handlers
   reasoning/               Reasoning effort/summary building, compat mode formatting
+  responses-state/          In-memory previous_response_id polyfill state (TTL + capacity)
   session/                 Deterministic session ID cache (SHA256 + UUID, LRU 10k entries)
   sse/                     SSE reader, chat/text/Ollama stream translators
   transform/               Message format conversion (Chat → Responses API, Ollama → OpenAI)
@@ -181,7 +196,7 @@ System instruction prompts (`prompts/prompt.md`, `prompts/prompt_gpt5_codex.md`)
 go test ./...
 ```
 
-Packages with tests: `auth`, `models`, `sse`, `transform`.
+Packages with tests include: `auth`, `models`, `proxy`, `responses-state`, `sse`, `transform`, `types`, `upstream`.
 
 ## Interoperability
 

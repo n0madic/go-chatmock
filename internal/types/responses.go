@@ -154,7 +154,7 @@ type UpstreamPayload struct {
 	Tools             []ResponsesTool      `json:"tools"`
 	ToolChoice        any                  `json:"tool_choice"`
 	ParallelToolCalls bool                 `json:"parallel_tool_calls"`
-	Store             bool                 `json:"store"`
+	Store             *bool                `json:"store,omitempty"`
 	Stream            bool                 `json:"stream"`
 	PromptCacheKey    string               `json:"prompt_cache_key"`
 	Include           []string             `json:"include,omitempty"`
