@@ -24,10 +24,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.Config.Verbose {
-		slog.Info("IN POST /v1/chat/completions", "body", string(body))
-	}
-
 	var req types.ChatCompletionRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		// Try stripping newlines
@@ -46,16 +42,20 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	messages := req.Messages
+	usedPromptFallback := false
+	usedInputFallback := false
 	if messages == nil {
 		// Try prompt or input fallback
 		if req.Prompt != "" {
 			messages = []types.ChatMessage{{Role: "user", Content: req.Prompt}}
+			usedPromptFallback = true
 		} else {
 			// Try raw payload for "input" field
 			var raw map[string]any
 			json.Unmarshal(body, &raw)
 			if input, ok := raw["input"].(string); ok {
 				messages = []types.ChatMessage{{Role: "user", Content: input}}
+				usedInputFallback = true
 			}
 		}
 		if messages == nil {
@@ -87,6 +87,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if len(extraTools) > 0 {
 		toolsResponses = append(toolsResponses, extraTools...)
 	}
+	defaultWebSearchApplied := req.ResponsesTools == nil && len(extraTools) > 0 && s.Config.DefaultWebSearch && req.ResponsesToolChoice != "none"
 
 	if rtc := req.ResponsesToolChoice; rtc == "auto" || rtc == "none" {
 		toolChoice = rtc
@@ -112,6 +113,32 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		reasoningOverrides,
 		model,
 	)
+	reasoningEffort := ""
+	reasoningSummary := ""
+	if reasoningParam != nil {
+		reasoningEffort = reasoningParam.Effort
+		reasoningSummary = reasoningParam.Summary
+	}
+	if s.Config.Verbose {
+		slog.Info("openai.chat.request",
+			"requested_model", requestedModel,
+			"upstream_model", model,
+			"stream", isStream,
+			"include_usage", includeUsage,
+			"messages", len(messages),
+			"input_items", len(inputItems),
+			"tools", len(toolsResponses),
+			"tool_choice", summarizeToolChoice(toolChoice),
+			"responses_tools", len(extraTools),
+			"default_web_search", defaultWebSearchApplied,
+			"parallel_tool_calls", parallelToolCalls,
+			"reasoning_effort", reasoningEffort,
+			"reasoning_summary", reasoningSummary,
+			"prompt_fallback", usedPromptFallback,
+			"input_fallback", usedInputFallback,
+			"session_override", strings.TrimSpace(r.Header.Get("X-Session-Id")) != "",
+		)
+	}
 
 	upReq := &upstream.Request{
 		Model:             model,
@@ -319,6 +346,24 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 	reasoningParam := reasoning.BuildReasoningParam(
 		s.Config.ReasoningEffort, s.Config.ReasoningSummary, reasoningOverrides, model,
 	)
+	reasoningEffort := ""
+	reasoningSummary := ""
+	if reasoningParam != nil {
+		reasoningEffort = reasoningParam.Effort
+		reasoningSummary = reasoningParam.Summary
+	}
+	if s.Config.Verbose {
+		slog.Info("openai.completions.request",
+			"requested_model", requestedModel,
+			"upstream_model", model,
+			"stream", isStream,
+			"include_usage", includeUsage,
+			"prompt_chars", len(prompt),
+			"input_items", len(inputItems),
+			"reasoning_effort", reasoningEffort,
+			"reasoning_summary", reasoningSummary,
+		)
+	}
 
 	upReq := &upstream.Request{
 		Model:          model,

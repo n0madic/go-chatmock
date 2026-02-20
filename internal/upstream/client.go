@@ -93,7 +93,25 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	}
 
 	if c.Verbose {
-		logJSON("OUTBOUND >> ChatGPT Responses API payload", payload)
+		reasoningEffort := ""
+		reasoningSummary := ""
+		if payload.Reasoning != nil {
+			reasoningEffort = payload.Reasoning.Effort
+			reasoningSummary = payload.Reasoning.Summary
+		}
+		slog.Info("upstream.request",
+			"model", payload.Model,
+			"input_items", len(payload.Input),
+			"tools", len(payload.Tools),
+			"tool_choice", summarizeToolChoice(payload.ToolChoice),
+			"parallel_tool_calls", payload.ParallelToolCalls,
+			"include_count", len(payload.Include),
+			"store", boolPtrState(payload.Store),
+			"reasoning_effort", reasoningEffort,
+			"reasoning_summary", reasoningSummary,
+			"instructions_chars", len(payload.Instructions),
+			"session_id", sessionID,
+		)
 	}
 
 	body, err := json.Marshal(payload)
@@ -117,6 +135,14 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("upstream ChatGPT request failed: %w", err)
 	}
+	if c.Verbose {
+		requestID := upstreamRequestID(resp.Header)
+		attrs := []any{"status", resp.StatusCode}
+		if requestID != "" {
+			attrs = append(attrs, "request_id", requestID)
+		}
+		slog.Info("upstream.response", attrs...)
+	}
 
 	return &Response{
 		StatusCode: resp.StatusCode,
@@ -125,13 +151,67 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	}, nil
 }
 
-func logJSON(prefix string, v any) {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		slog.Info(prefix, "data", fmt.Sprintf("%v", v))
-		return
+func summarizeToolChoice(choice any) string {
+	switch v := choice.(type) {
+	case nil:
+		return "auto"
+	case string:
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return "auto"
+		}
+		return v
+	case map[string]any:
+		kind, _ := v["type"].(string)
+		if fn, ok := v["function"].(map[string]any); ok {
+			if name, _ := fn["name"].(string); name != "" {
+				if kind != "" {
+					return kind + ":" + name
+				}
+				return "function:" + name
+			}
+		}
+		if kind != "" {
+			return kind
+		}
+		return "object"
+	default:
+		return fmt.Sprintf("%T", choice)
 	}
-	slog.Info(prefix + "\n" + string(data))
+}
+
+func boolPtrState(v *bool) string {
+	if v == nil {
+		return "unset"
+	}
+	if *v {
+		return "true"
+	}
+	return "false"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func upstreamRequestID(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	return firstNonEmpty(
+		headers.Get("x-request-id"),
+		headers.Get("x-openai-request-id"),
+		headers.Get("x-oai-request-id"),
+		headers.Get("openai-request-id"),
+		headers.Get("request-id"),
+		headers.Get("cf-ray"),
+	)
 }
 
 func mergeIncludes(clientInclude []string, includeReasoning bool) []string {

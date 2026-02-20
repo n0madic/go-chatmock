@@ -102,10 +102,6 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.Config.Verbose {
-		slog.Info("IN POST /api/chat", "body", string(body))
-	}
-
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		writeOllamaError(w, http.StatusBadRequest, "Invalid JSON body")
@@ -151,6 +147,7 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 		writeOllamaError(w, http.StatusBadRequest, "Only web_search/web_search_preview are supported in responses_tools")
 		return
 	}
+	defaultWebSearchApplied := rtPayload == nil && len(extraTools) > 0 && s.Config.DefaultWebSearch && rtChoice != "none"
 	if len(extraTools) > 0 {
 		toolsResponses = append(toolsResponses, extraTools...)
 	}
@@ -185,6 +182,30 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 		modelReasoning,
 		modelName,
 	)
+	reasoningEffort := ""
+	reasoningSummary := ""
+	if reasoningParam != nil {
+		reasoningEffort = reasoningParam.Effort
+		reasoningSummary = reasoningParam.Summary
+	}
+	if s.Config.Verbose {
+		slog.Info("ollama.chat.request",
+			"requested_model", modelName,
+			"upstream_model", normalizedModel,
+			"stream", streamReq,
+			"messages", len(rawMsgs),
+			"input_items", len(inputItems),
+			"images", len(topImages),
+			"tools", len(toolsResponses),
+			"tool_choice", summarizeToolChoice(toolChoice),
+			"responses_tools", len(extraTools),
+			"default_web_search", defaultWebSearchApplied,
+			"parallel_tool_calls", parallelToolCalls,
+			"reasoning_effort", reasoningEffort,
+			"reasoning_summary", reasoningSummary,
+			"session_override", strings.TrimSpace(r.Header.Get("X-Session-Id")) != "",
+		)
+	}
 
 	upReq := &upstream.Request{
 		Model:             normalizedModel,

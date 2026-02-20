@@ -63,7 +63,7 @@ The server listens on `http://127.0.0.1:8000` by default.
 |------|---------|-------------|
 | `--host` | `127.0.0.1` | Bind address |
 | `--port` | `8000` | Listen port |
-| `--verbose` | `false` | Log all requests and upstream payloads |
+| `--verbose` | `false` | Log structured request/upstream summaries |
 | `--verbose-obfuscation` | `false` | Dump raw SSE events |
 | `--reasoning-effort` | `medium` | Default reasoning effort (`minimal`, `low`, `medium`, `high`, `xhigh`) |
 | `--reasoning-summary` | `auto` | Reasoning summary mode (`auto`, `concise`, `detailed`, `none`) |

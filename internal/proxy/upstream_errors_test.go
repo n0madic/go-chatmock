@@ -87,3 +87,13 @@ func TestFormatUpstreamErrorWithHeaders(t *testing.T) {
 		t.Fatalf("did not expect request id without headers, got %q", gotNoHeader)
 	}
 }
+
+func TestFormatUpstreamErrorWithHeadersFallbackHeader(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("x-oai-request-id", "oai_456")
+
+	got := formatUpstreamErrorWithHeaders(http.StatusBadRequest, []byte(``), headers)
+	if !strings.Contains(got, "request_id: oai_456") {
+		t.Fatalf("expected fallback request id in message, got %q", got)
+	}
+}

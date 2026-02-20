@@ -31,17 +31,25 @@ func formatUpstreamErrorWithHeaders(statusCode int, rawBody []byte, headers http
 	if headers == nil {
 		return msg
 	}
-	reqID := strings.TrimSpace(headers.Get("x-request-id"))
-	if reqID == "" {
-		reqID = strings.TrimSpace(headers.Get("x-openai-request-id"))
-	}
-	if reqID == "" {
-		reqID = strings.TrimSpace(headers.Get("cf-ray"))
-	}
+	reqID := extractUpstreamRequestID(headers)
 	if reqID == "" {
 		return msg
 	}
 	return fmt.Sprintf("%s (request_id: %s)", msg, reqID)
+}
+
+func extractUpstreamRequestID(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	return firstNonEmptyTrimmed(
+		headers.Get("x-request-id"),
+		headers.Get("x-openai-request-id"),
+		headers.Get("x-oai-request-id"),
+		headers.Get("openai-request-id"),
+		headers.Get("request-id"),
+		headers.Get("cf-ray"),
+	)
 }
 
 func extractUpstreamErrorMessage(rawBody []byte) string {
@@ -128,4 +136,14 @@ func compactBodyPreview(rawBody []byte, maxLen int) string {
 		return clean
 	}
 	return clean[:maxLen] + "..."
+}
+
+func firstNonEmptyTrimmed(values ...string) string {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

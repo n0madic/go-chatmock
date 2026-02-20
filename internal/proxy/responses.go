@@ -25,10 +25,6 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.Config.Verbose {
-		slog.Info("IN POST /v1/responses", "body", string(body))
-	}
-
 	var req types.ResponsesRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid JSON body")
@@ -85,10 +81,12 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 	// Tools: pass through directly; apply default web search if none provided
 	tools := req.Tools
+	defaultWebSearchApplied := false
 	if tools == nil && s.Config.DefaultWebSearch {
 		toolChoiceStr, _ := req.ToolChoice.(string)
 		if toolChoiceStr != "none" {
 			tools = []types.ResponsesTool{{Type: "web_search"}}
+			defaultWebSearchApplied = true
 		}
 	}
 
@@ -105,6 +103,32 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	storeForUpstream, storeForced := normalizeStoreForUpstream(req.Store)
 	if storeForced && s.Config.Verbose {
 		slog.Warn("client requested store=true; forcing store=false for upstream compatibility")
+	}
+	reasoningEffort := ""
+	reasoningSummary := ""
+	if reasoningParam != nil {
+		reasoningEffort = reasoningParam.Effort
+		reasoningSummary = reasoningParam.Summary
+	}
+	if s.Config.Verbose {
+		slog.Info("responses.request",
+			"requested_model", requestedModel,
+			"upstream_model", model,
+			"stream", req.Stream,
+			"input_items", len(inputItems),
+			"tools", len(tools),
+			"tool_choice", summarizeToolChoice(toolChoice),
+			"parallel_tool_calls", parallelToolCalls,
+			"include_count", len(req.Include),
+			"instructions_chars", len(instructions),
+			"previous_response_id", strings.TrimSpace(req.PreviousResponseID) != "",
+			"store_requested", boolPtrState(req.Store),
+			"store_upstream", boolPtrState(storeForUpstream),
+			"default_web_search", defaultWebSearchApplied,
+			"reasoning_effort", reasoningEffort,
+			"reasoning_summary", reasoningSummary,
+			"session_override", strings.TrimSpace(r.Header.Get("X-Session-Id")) != "",
+		)
 	}
 
 	upReq := &upstream.Request{

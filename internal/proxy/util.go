@@ -3,9 +3,11 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/n0madic/go-chatmock/internal/limits"
 	"github.com/n0madic/go-chatmock/internal/types"
@@ -29,6 +31,45 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func writeOllamaError(w http.ResponseWriter, status int, message string) {
 	slog.Error("request failed", "status", status, "error", message)
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func summarizeToolChoice(choice any) string {
+	switch v := choice.(type) {
+	case nil:
+		return "auto"
+	case string:
+		val := strings.TrimSpace(v)
+		if val == "" {
+			return "auto"
+		}
+		return val
+	case map[string]any:
+		kind, _ := v["type"].(string)
+		if fn, ok := v["function"].(map[string]any); ok {
+			if name, _ := fn["name"].(string); name != "" {
+				if kind != "" {
+					return kind + ":" + name
+				}
+				return "function:" + name
+			}
+		}
+		if kind != "" {
+			return kind
+		}
+		return "object"
+	default:
+		return fmt.Sprintf("%T", choice)
+	}
+}
+
+func boolPtrState(v *bool) string {
+	if v == nil {
+		return "unset"
+	}
+	if *v {
+		return "true"
+	}
+	return "false"
 }
 
 // doWithRetry handles an upstream 4xx response. If hadResponsesTools is true it

@@ -31,10 +31,6 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if s.Config.Verbose {
-		slog.Info("IN POST /v1/messages", "body", string(body))
-	}
-
 	var req types.AnthropicMessagesRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON body")
@@ -43,14 +39,6 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 
 	resolvedModel, matchedModel := models.ResolveAnthropicModel(req.Model, models.DefaultAnthropicFallbackModel)
 	model := models.NormalizeModelName(resolvedModel, s.Config.DebugModel)
-	if s.Config.Verbose {
-		slog.Info("anthropic model mapping",
-			"requested_model", req.Model,
-			"resolved_model", resolvedModel,
-			"normalized_model", model,
-			"explicit_match", matchedModel,
-		)
-	}
 	if s.Config.DebugModel == "" {
 		ok, hint := s.Registry.IsKnownModel(model)
 		if !ok {
@@ -83,8 +71,10 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	}
 
 	tools := transform.AnthropicToolsToResponses(req.Tools)
+	defaultWebSearchApplied := false
 	if len(tools) == 0 && s.Config.DefaultWebSearch {
 		tools = []types.ResponsesTool{{Type: "web_search"}}
+		defaultWebSearchApplied = true
 	}
 
 	reasoningParam := reasoning.BuildReasoningParam(
@@ -93,6 +83,32 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		nil,
 		model,
 	)
+	reasoningEffort := ""
+	reasoningSummary := ""
+	if reasoningParam != nil {
+		reasoningEffort = reasoningParam.Effort
+		reasoningSummary = reasoningParam.Summary
+	}
+	if s.Config.Verbose {
+		slog.Info("anthropic.messages.request",
+			"requested_model", req.Model,
+			"resolved_model", resolvedModel,
+			"upstream_model", model,
+			"explicit_match", matchedModel,
+			"stream", req.Stream,
+			"max_tokens", req.MaxTokens,
+			"messages", len(req.Messages),
+			"input_items", len(inputItems),
+			"tools", len(tools),
+			"tool_choice", summarizeToolChoice(req.ToolChoice),
+			"system_chars", len(systemText),
+			"instructions_chars", len(instructions),
+			"default_web_search", defaultWebSearchApplied,
+			"reasoning_effort", reasoningEffort,
+			"reasoning_summary", reasoningSummary,
+			"session_override", strings.TrimSpace(r.Header.Get("X-Session-Id")) != "",
+		)
+	}
 
 	upReq := &upstream.Request{
 		Model:             model,
