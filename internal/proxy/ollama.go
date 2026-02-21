@@ -1,18 +1,14 @@
 package proxy
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/n0madic/go-chatmock/internal/config"
-	"github.com/n0madic/go-chatmock/internal/limits"
 	"github.com/n0madic/go-chatmock/internal/models"
-	"github.com/n0madic/go-chatmock/internal/reasoning"
 	"github.com/n0madic/go-chatmock/internal/sse"
 	"github.com/n0madic/go-chatmock/internal/transform"
 	"github.com/n0madic/go-chatmock/internal/types"
@@ -58,14 +54,8 @@ func (s *Server) handleOllamaTags(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOllamaShow(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Failed to read request body")
-		return
-	}
 	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid JSON body")
+	if _, ok := parseJSONRequest(w, r, &payload, writeError, "Failed to read request body", "Invalid JSON body"); !ok {
 		return
 	}
 	model, _ := payload["model"].(string)
@@ -96,15 +86,8 @@ func (s *Server) handleOllamaShow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Failed to read request body")
-		return
-	}
-
 	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		writeOllamaError(w, http.StatusBadRequest, "Invalid JSON body")
+	if _, ok := parseJSONRequest(w, r, &payload, writeOllamaError, "Failed to read request body", "Invalid JSON body"); !ok {
 		return
 	}
 
@@ -164,7 +147,6 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	// Convert to Responses input
 	inputItems := transform.ChatMessagesToResponsesInput(messages)
 
-	modelReasoning := reasoning.ExtractFromModelName(modelName)
 	normalizedModel := models.NormalizeModelName(modelName, s.Config.DebugModel)
 
 	if ok, hint := s.Registry.IsKnownModel(normalizedModel); !ok {
@@ -176,18 +158,8 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reasoningParam := reasoning.BuildReasoningParam(
-		s.Config.ReasoningEffort,
-		s.Config.ReasoningSummary,
-		modelReasoning,
-		modelName,
-	)
-	reasoningEffort := ""
-	reasoningSummary := ""
-	if reasoningParam != nil {
-		reasoningEffort = reasoningParam.Effort
-		reasoningSummary = reasoningParam.Summary
-	}
+	reasoningParam := buildReasoningWithModelFallback(s.Config, modelName, modelName, nil)
+	reasoningEffort, reasoningSummary := reasoningLogFields(reasoningParam)
 	if s.Config.Verbose {
 		slog.Info("ollama.chat.request",
 			"requested_model", modelName,
@@ -218,20 +190,10 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 		SessionID:         r.Header.Get("X-Session-Id"),
 	}
 
-	resp, err := s.upstreamClient.Do(r.Context(), upReq)
-	if err != nil {
-		writeOllamaError(w, http.StatusUnauthorized, err.Error())
+	baseTools := transform.ToolsChatToResponses(normalizedTools)
+	resp, ok := s.doUpstreamWithResponsesToolsRetry(r.Context(), w, upReq, hadResponsesTools, baseTools, writeOllamaError)
+	if !ok {
 		return
-	}
-	limits.RecordFromResponse(resp.Headers)
-
-	if resp.StatusCode >= 400 {
-		baseTools := transform.ToolsChatToResponses(normalizedTools)
-		var ok bool
-		resp, ok = s.doWithRetry(r.Context(), w, resp, upReq, hadResponsesTools, baseTools, writeOllamaError)
-		if !ok {
-			return
-		}
 	}
 
 	createdAt := time.Now().UTC().Format("2006-01-02T15:04:05Z")
@@ -242,69 +204,28 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		sse.TranslateOllama(w, resp.Body.Body, modelOut, createdAt, sse.TranslateOllamaOptions{
 			ReasoningCompat: s.Config.ReasoningCompat,
-			Verbose:         s.Config.Verbose,
 		})
 		return
 	}
 
 	// Non-streaming Ollama
-	s.collectOllamaChat(w, resp, modelOut, normalizedModel, createdAt)
+	s.collectOllamaChat(w, resp, normalizedModel, createdAt)
 }
 
-func (s *Server) collectOllamaChat(w http.ResponseWriter, resp *upstream.Response, modelOut, normalizedModel, createdAt string) {
-	defer resp.Body.Body.Close()
-
-	reader := sse.NewReader(resp.Body.Body)
-	var fullText string
-	var reasoningSummaryText string
-	var reasoningFullText string
-	var toolCalls []types.ToolCall
-
-	for {
-		evt, err := reader.Next()
-		if err != nil {
-			break
-		}
-		switch evt.Type {
-		case "response.output_text.delta":
-			delta, _ := evt.Data["delta"].(string)
-			fullText += delta
-		case "response.reasoning_summary_text.delta":
-			delta, _ := evt.Data["delta"].(string)
-			reasoningSummaryText += delta
-		case "response.reasoning_text.delta":
-			delta, _ := evt.Data["delta"].(string)
-			reasoningFullText += delta
-		case "response.output_item.done":
-			item, _ := evt.Data["item"].(map[string]any)
-			if t, _ := item["type"].(string); t == "function_call" {
-				callID := stringOrEmpty(item, "call_id")
-				if callID == "" {
-					callID = stringOrEmpty(item, "id")
-				}
-				name := stringOrEmpty(item, "name")
-				args := stringOrEmpty(item, "arguments")
-				if callID != "" && name != "" {
-					toolCalls = append(toolCalls, types.ToolCall{
-						ID: callID, Type: "function",
-						Function: types.FunctionCall{Name: name, Arguments: args},
-					})
-				}
-			}
-		case "response.completed":
-			goto ollamaDone
-		}
-	}
-
-ollamaDone:
+func (s *Server) collectOllamaChat(w http.ResponseWriter, resp *upstream.Response, normalizedModel, createdAt string) {
+	collected := collectTextResponseFromSSE(resp.Body.Body, collectTextResponseOptions{
+		CollectReasoning: true,
+		CollectToolCalls: true,
+	})
+	fullText := collected.FullText
 	compat := s.Config.ReasoningCompat
 	if compat == "" || compat == "think-tags" {
 		var parts []string
-		if reasoningSummaryText != "" {
-			parts = append(parts, reasoningSummaryText)
+		if collected.ReasoningSummary != "" {
+			parts = append(parts, collected.ReasoningSummary)
 		}
-		if reasoningFullText != "" {
-			parts = append(parts, reasoningFullText)
+		if collected.ReasoningFull != "" {
+			parts = append(parts, collected.ReasoningFull)
 		}
 		if len(parts) > 0 {
 			var rtxt strings.Builder
@@ -321,7 +242,7 @@ ollamaDone:
 	chunk := types.OllamaStreamChunk{
 		Model:          normalizedModel,
 		CreatedAt:      createdAt,
-		Message:        types.OllamaMessage{Role: "assistant", Content: fullText, ToolCalls: toolCalls},
+		Message:        types.OllamaMessage{Role: "assistant", Content: fullText, ToolCalls: collected.ToolCalls},
 		Done:           true,
 		DoneReason:     "stop",
 		OllamaFakeEval: types.OllamaFakeEvalDefaults,

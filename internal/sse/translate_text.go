@@ -12,7 +12,6 @@ import (
 
 // TranslateTextOptions holds options for text completion SSE translation.
 type TranslateTextOptions struct {
-	Verbose      bool
 	IncludeUsage bool
 }
 

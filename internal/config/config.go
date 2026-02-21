@@ -18,7 +18,6 @@ type ServerConfig struct {
 	Host                  string
 	Port                  int
 	Verbose               bool
-	VerboseObfuscation    bool
 	ReasoningEffort       string
 	ReasoningSummary      string
 	ReasoningCompat       string

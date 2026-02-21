@@ -11,7 +11,6 @@ import (
 
 	"github.com/n0madic/go-chatmock/internal/limits"
 	"github.com/n0madic/go-chatmock/internal/models"
-	"github.com/n0madic/go-chatmock/internal/reasoning"
 	"github.com/n0madic/go-chatmock/internal/responses-state"
 	"github.com/n0madic/go-chatmock/internal/sse"
 	"github.com/n0madic/go-chatmock/internal/types"
@@ -19,15 +18,8 @@ import (
 )
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Failed to read request body")
-		return
-	}
-
 	var req types.ResponsesRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid JSON body")
+	if _, ok := parseJSONRequest(w, r, &req, writeError, "Failed to read request body", "Invalid JSON body"); !ok {
 		return
 	}
 
@@ -51,17 +43,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reasoning
-	modelReasoning := reasoning.ExtractFromModelName(requestedModel)
-	reasoningOverrides := req.Reasoning
-	if reasoningOverrides == nil {
-		reasoningOverrides = modelReasoning
-	}
-	reasoningParam := reasoning.BuildReasoningParam(
-		s.Config.ReasoningEffort,
-		s.Config.ReasoningSummary,
-		reasoningOverrides,
-		model,
-	)
+	reasoningParam := buildReasoningWithModelFallback(s.Config, requestedModel, model, req.Reasoning)
 
 	// Responses API should use client-provided instructions only. We also move
 	// system-role input messages into instructions for upstream compatibility.
@@ -104,12 +86,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if storeForced && s.Config.Verbose {
 		slog.Warn("client requested store=true; forcing store=false for upstream compatibility")
 	}
-	reasoningEffort := ""
-	reasoningSummary := ""
-	if reasoningParam != nil {
-		reasoningEffort = reasoningParam.Effort
-		reasoningSummary = reasoningParam.Summary
-	}
+	reasoningEffort, reasoningSummary := reasoningLogFields(reasoningParam)
 	if s.Config.Verbose {
 		slog.Info("responses.request",
 			"requested_model", requestedModel,
@@ -153,18 +130,17 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	limits.RecordFromResponse(resp.Headers)
 
 	if resp.StatusCode >= 400 {
-		errBody, _ := io.ReadAll(resp.Body.Body)
-		resp.Body.Body.Close()
-		if upReq.Store != nil && isUnsupportedParameterError(errBody, "store") {
-			slog.Warn("upstream rejected store parameter; retrying without store")
-			upReq.Store = nil
-
-			resp2, err2 := s.upstreamClient.Do(r.Context(), upReq)
-			if err2 != nil {
-				writeError(w, http.StatusBadGateway, "Upstream retry failed after removing store: "+err2.Error())
+		resp2, errBody, retried, retryErr := s.retryIfStoreUnsupported(
+			r.Context(),
+			resp,
+			upReq,
+			"upstream rejected store parameter; retrying without store",
+		)
+		if retried {
+			if retryErr != nil {
+				writeError(w, http.StatusBadGateway, "Upstream retry failed after removing store: "+retryErr.Error())
 				return
 			}
-			limits.RecordFromResponse(resp2.Headers)
 			if resp2.StatusCode >= 400 {
 				errBody2, _ := io.ReadAll(resp2.Body.Body)
 				resp2.Body.Body.Close()
@@ -188,10 +164,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.WriteHeader(resp.StatusCode)
+		writeSSEHeaders(w, resp.StatusCode)
 		s.streamResponsesWithState(w, resp, inputItems, instructions)
 		return
 	}
@@ -338,14 +311,6 @@ func (s *Server) streamResponsesWithState(w http.ResponseWriter, resp *upstream.
 
 	s.responsesState.PutSnapshot(responseID, appendContextHistory(requestInput, outputItemsToInputItems(outputItems)), toolCalls)
 	s.responsesState.PutInstructions(responseID, instructions)
-}
-
-func responseIDFromEvent(data map[string]any) string {
-	resp, _ := data["response"].(map[string]any)
-	if resp == nil {
-		return ""
-	}
-	return stringFromAny(resp["id"])
 }
 
 // unmarshalOutputItem converts a raw map to ResponsesOutputItem via JSON round-trip.

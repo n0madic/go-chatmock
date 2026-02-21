@@ -18,9 +18,8 @@ import (
 )
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Failed to read request body")
+	body, ok := readLimitedRequestBody(w, r, writeError, "Failed to read request body")
+	if !ok {
 		return
 	}
 
@@ -102,23 +101,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	modelReasoning := reasoning.ExtractFromModelName(requestedModel)
-	reasoningOverrides := req.Reasoning
-	if reasoningOverrides == nil {
-		reasoningOverrides = modelReasoning
-	}
-	reasoningParam := reasoning.BuildReasoningParam(
-		s.Config.ReasoningEffort,
-		s.Config.ReasoningSummary,
-		reasoningOverrides,
-		model,
-	)
-	reasoningEffort := ""
-	reasoningSummary := ""
-	if reasoningParam != nil {
-		reasoningEffort = reasoningParam.Effort
-		reasoningSummary = reasoningParam.Summary
-	}
+	reasoningParam := buildReasoningWithModelFallback(s.Config, requestedModel, model, req.Reasoning)
+	reasoningEffort, reasoningSummary := reasoningLogFields(reasoningParam)
 	if s.Config.Verbose {
 		slog.Info("openai.chat.request",
 			"requested_model", requestedModel,
@@ -151,21 +135,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		SessionID:         r.Header.Get("X-Session-Id"),
 	}
 
-	resp, err := s.upstreamClient.Do(r.Context(), upReq)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+	baseTools := transform.ToolsChatToResponses(req.Tools)
+	resp, ok := s.doUpstreamWithResponsesToolsRetry(r.Context(), w, upReq, hadResponsesTools, baseTools, writeError)
+	if !ok {
 		return
-	}
-
-	limits.RecordFromResponse(resp.Headers)
-
-	if resp.StatusCode >= 400 {
-		baseTools := transform.ToolsChatToResponses(req.Tools)
-		var ok bool
-		resp, ok = s.doWithRetry(r.Context(), w, resp, upReq, hadResponsesTools, baseTools, writeError)
-		if !ok {
-			return
-		}
 	}
 
 	created := time.Now().Unix()
@@ -175,13 +148,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isStream {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.WriteHeader(resp.StatusCode)
+		writeSSEHeaders(w, resp.StatusCode)
 		sse.TranslateChat(w, resp.Body.Body, outputModel, created, sse.TranslateChatOptions{
 			ReasoningCompat: s.Config.ReasoningCompat,
-			Verbose:         s.Config.VerboseObfuscation,
 			IncludeUsage:    includeUsage,
 		})
 		return
@@ -192,110 +161,42 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) collectChatCompletion(w http.ResponseWriter, resp *upstream.Response, model string, created int64) {
-	defer resp.Body.Body.Close()
+	collected := collectTextResponseFromSSE(resp.Body.Body, collectTextResponseOptions{
+		InitialResponseID: "chatcmpl",
+		CollectUsage:      true,
+		CollectReasoning:  true,
+		CollectToolCalls:  true,
+		StopOnFailed:      true,
+	})
 
-	reader := sse.NewReader(resp.Body.Body)
-	var fullText strings.Builder
-	var reasoningSummaryText strings.Builder
-	var reasoningFullText strings.Builder
-	responseID := "chatcmpl"
-	var toolCalls []types.ToolCall
-	var errorMessage string
-	var usageObj *types.Usage
-
-	for {
-		evt, err := reader.Next()
-		if err != nil {
-			break
-		}
-
-		if r, ok := evt.Data["response"].(map[string]any); ok {
-			if id, ok := r["id"].(string); ok && id != "" {
-				responseID = id
-			}
-		}
-
-		usageData := types.ExtractUsageFromEvent(evt.Data)
-		if usageData != nil {
-			usageObj = usageData
-		}
-
-		switch evt.Type {
-		case "response.output_text.delta":
-			delta, _ := evt.Data["delta"].(string)
-			fullText.WriteString(delta)
-		case "response.reasoning_summary_text.delta":
-			delta, _ := evt.Data["delta"].(string)
-			reasoningSummaryText.WriteString(delta)
-		case "response.reasoning_text.delta":
-			delta, _ := evt.Data["delta"].(string)
-			reasoningFullText.WriteString(delta)
-		case "response.output_item.done":
-			item, _ := evt.Data["item"].(map[string]any)
-			if itemType, _ := item["type"].(string); itemType == "function_call" {
-				callID := stringOrEmpty(item, "call_id")
-				if callID == "" {
-					callID = stringOrEmpty(item, "id")
-				}
-				name := stringOrEmpty(item, "name")
-				args := stringOrEmpty(item, "arguments")
-				if callID != "" && name != "" {
-					toolCalls = append(toolCalls, types.ToolCall{
-						ID: callID, Type: "function",
-						Function: types.FunctionCall{Name: name, Arguments: args},
-					})
-				}
-			}
-		case "response.failed":
-			if r, ok := evt.Data["response"].(map[string]any); ok {
-				if e, ok := r["error"].(map[string]any); ok {
-					errorMessage, _ = e["message"].(string)
-				}
-			}
-			if errorMessage == "" {
-				errorMessage = "response.failed"
-			}
-		case "response.completed":
-			goto done
-		}
-	}
-
-done:
-	if errorMessage != "" {
-		writeError(w, http.StatusBadGateway, errorMessage)
+	if collected.ErrorMessage != "" {
+		writeError(w, http.StatusBadGateway, collected.ErrorMessage)
 		return
 	}
 
-	message := types.ChatResponseMsg{Role: "assistant", Content: fullText.String()}
-	if len(toolCalls) > 0 {
-		message.ToolCalls = toolCalls
+	message := types.ChatResponseMsg{Role: "assistant", Content: collected.FullText}
+	if len(collected.ToolCalls) > 0 {
+		message.ToolCalls = collected.ToolCalls
 	}
-	reasoning.ApplyReasoningToMessage(&message, reasoningSummaryText.String(), reasoningFullText.String(), s.Config.ReasoningCompat)
+	reasoning.ApplyReasoningToMessage(&message, collected.ReasoningSummary, collected.ReasoningFull, s.Config.ReasoningCompat)
 
 	completion := types.ChatCompletionResponse{
-		ID:      responseID,
+		ID:      collected.ResponseID,
 		Object:  "chat.completion",
 		Created: created,
 		Model:   model,
 		Choices: []types.ChatChoice{
 			{Index: 0, Message: message, FinishReason: types.StringPtr("stop")},
 		},
-		Usage: usageObj,
+		Usage: collected.Usage,
 	}
 
 	writeJSON(w, resp.StatusCode, completion)
 }
 
 func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Failed to read request body")
-		return
-	}
-
 	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid JSON body")
+	if _, ok := parseJSONRequest(w, r, &payload, writeError, "Failed to read request body", "Invalid JSON body"); !ok {
 		return
 	}
 
@@ -329,7 +230,6 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 	messages := []types.ChatMessage{{Role: "user", Content: prompt}}
 	inputItems := transform.ChatMessagesToResponsesInput(messages)
 
-	modelReasoning := reasoning.ExtractFromModelName(requestedModel)
 	var reasoningOverrides *types.ReasoningParam
 	if ro, ok := payload["reasoning"].(map[string]any); ok {
 		reasoningOverrides = &types.ReasoningParam{}
@@ -340,18 +240,8 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 			reasoningOverrides.Summary = s
 		}
 	}
-	if reasoningOverrides == nil {
-		reasoningOverrides = modelReasoning
-	}
-	reasoningParam := reasoning.BuildReasoningParam(
-		s.Config.ReasoningEffort, s.Config.ReasoningSummary, reasoningOverrides, model,
-	)
-	reasoningEffort := ""
-	reasoningSummary := ""
-	if reasoningParam != nil {
-		reasoningEffort = reasoningParam.Effort
-		reasoningSummary = reasoningParam.Summary
-	}
+	reasoningParam := buildReasoningWithModelFallback(s.Config, requestedModel, model, reasoningOverrides)
+	reasoningEffort, reasoningSummary := reasoningLogFields(reasoningParam)
 	if s.Config.Verbose {
 		slog.Info("openai.completions.request",
 			"requested_model", requestedModel,
@@ -393,56 +283,27 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isStream {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.WriteHeader(resp.StatusCode)
+		writeSSEHeaders(w, resp.StatusCode)
 		sse.TranslateText(w, resp.Body.Body, outputModel, created, sse.TranslateTextOptions{
-			Verbose:      s.Config.VerboseObfuscation,
 			IncludeUsage: includeUsage,
 		})
 		return
 	}
 
 	// Non-streaming
-	defer resp.Body.Body.Close()
-	reader := sse.NewReader(resp.Body.Body)
-	var fullText strings.Builder
-	responseID := "cmpl"
-	var usageObj *types.Usage
-
-	for {
-		evt, err := reader.Next()
-		if err != nil {
-			break
-		}
-		if r, ok := evt.Data["response"].(map[string]any); ok {
-			if id, ok := r["id"].(string); ok && id != "" {
-				responseID = id
-			}
-		}
-		if u := types.ExtractUsageFromEvent(evt.Data); u != nil {
-			usageObj = u
-		}
-		switch evt.Type {
-		case "response.output_text.delta":
-			delta, _ := evt.Data["delta"].(string)
-			fullText.WriteString(delta)
-		case "response.completed":
-			goto textDone
-		}
-	}
-
-textDone:
+	collected := collectTextResponseFromSSE(resp.Body.Body, collectTextResponseOptions{
+		InitialResponseID: "cmpl",
+		CollectUsage:      true,
+	})
 	completion := types.TextCompletionResponse{
-		ID:      responseID,
+		ID:      collected.ResponseID,
 		Object:  "text_completion",
 		Created: created,
 		Model:   outputModel,
 		Choices: []types.TextChoice{
-			{Index: 0, Text: fullText.String(), FinishReason: types.StringPtr("stop"), Logprobs: nil},
+			{Index: 0, Text: collected.FullText, FinishReason: types.StringPtr("stop"), Logprobs: nil},
 		},
-		Usage: usageObj,
+		Usage: collected.Usage,
 	}
 	writeJSON(w, resp.StatusCode, completion)
 }
@@ -521,10 +382,5 @@ func convertSystemToUser(messages []types.ChatMessage) {
 
 func boolVal(m map[string]any, key string) bool {
 	v, _ := m[key].(bool)
-	return v
-}
-
-func stringOrEmpty(m map[string]any, key string) string {
-	v, _ := m[key].(string)
 	return v
 }

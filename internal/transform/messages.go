@@ -111,7 +111,7 @@ func extractContentItems(content any, role string) []types.ResponsesContent {
 			ptype, _ := p["type"].(string)
 			switch ptype {
 			case "text":
-				text := stringOrMap(p, "text", "")
+				text := stringOr(p, "text", "")
 				if text == "" {
 					text, _ = p["content"].(string)
 				}
@@ -175,13 +175,6 @@ func normalizeImageDataURL(u string) string {
 }
 
 func stringOr(m map[string]any, key, fallback string) string {
-	if v, ok := m[key].(string); ok && v != "" {
-		return v
-	}
-	return fallback
-}
-
-func stringOrMap(m map[string]any, key, fallback string) string {
 	if v, ok := m[key].(string); ok && v != "" {
 		return v
 	}

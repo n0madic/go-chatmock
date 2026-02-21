@@ -20,7 +20,6 @@ type TokenData struct {
 
 // AuthFile represents the full auth.json contents.
 type AuthFile struct {
-	APIKey      string    `json:"OPENAI_API_KEY,omitempty"`
 	Tokens      TokenData `json:"tokens"`
 	LastRefresh string    `json:"last_refresh"`
 }

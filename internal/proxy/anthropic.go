@@ -11,7 +11,6 @@ import (
 	anthropicutil "github.com/n0madic/go-chatmock/internal/anthropic"
 	"github.com/n0madic/go-chatmock/internal/limits"
 	"github.com/n0madic/go-chatmock/internal/models"
-	"github.com/n0madic/go-chatmock/internal/reasoning"
 	"github.com/n0madic/go-chatmock/internal/sse"
 	"github.com/n0madic/go-chatmock/internal/transform"
 	"github.com/n0madic/go-chatmock/internal/types"
@@ -20,20 +19,24 @@ import (
 
 const anthropicModelCreatedAt = "2024-01-01T00:00:00Z"
 
+func writeAnthropicInvalidRequest(w http.ResponseWriter, status int, message string) {
+	writeAnthropicError(w, status, "invalid_request_error", message)
+}
+
 func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if !validateAnthropicHeaders(w, r) {
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
-		return
-	}
-
 	var req types.AnthropicMessagesRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON body")
+	if _, ok := parseJSONRequest(
+		w,
+		r,
+		&req,
+		writeAnthropicInvalidRequest,
+		"Failed to read request body",
+		"Invalid JSON body",
+	); !ok {
 		return
 	}
 
@@ -82,18 +85,8 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		reasoningOverrides = &types.ReasoningParam{Effort: effort}
 	}
 
-	reasoningParam := reasoning.BuildReasoningParam(
-		s.Config.ReasoningEffort,
-		s.Config.ReasoningSummary,
-		reasoningOverrides,
-		model,
-	)
-	reasoningEffort := ""
-	reasoningSummary := ""
-	if reasoningParam != nil {
-		reasoningEffort = reasoningParam.Effort
-		reasoningSummary = reasoningParam.Summary
-	}
+	reasoningParam := buildReasoningWithModelFallback(s.Config, req.Model, model, reasoningOverrides)
+	reasoningEffort, reasoningSummary := reasoningLogFields(reasoningParam)
 	if s.Config.Verbose {
 		slog.Info("anthropic.messages.request",
 			"requested_model", req.Model,
@@ -135,19 +128,16 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	limits.RecordFromResponse(resp.Headers)
 
 	if resp.StatusCode >= 400 {
-		errBody, _ := io.ReadAll(resp.Body.Body)
-		resp.Body.Body.Close()
-		if upReq.Store != nil && isUnsupportedParameterError(errBody, "store") {
-			if s.Config.Verbose {
-				slog.Warn("upstream rejected store parameter on anthropic route; retrying without store")
-			}
-			upReq.Store = nil
-			resp2, err2 := s.upstreamClient.Do(r.Context(), upReq)
-			if err2 != nil {
-				writeAnthropicError(w, http.StatusBadGateway, "api_error", "Upstream retry failed after removing store: "+err2.Error())
+		warnMsg := ""
+		if s.Config.Verbose {
+			warnMsg = "upstream rejected store parameter on anthropic route; retrying without store"
+		}
+		resp2, errBody, retried, retryErr := s.retryIfStoreUnsupported(r.Context(), resp, upReq, warnMsg)
+		if retried {
+			if retryErr != nil {
+				writeAnthropicError(w, http.StatusBadGateway, "api_error", "Upstream retry failed after removing store: "+retryErr.Error())
 				return
 			}
-			limits.RecordFromResponse(resp2.Headers)
 			if resp2.StatusCode >= 400 {
 				errBody2, _ := io.ReadAll(resp2.Body.Body)
 				resp2.Body.Body.Close()
@@ -175,10 +165,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.Stream {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.WriteHeader(resp.StatusCode)
+		writeSSEHeaders(w, resp.StatusCode)
 		sse.TranslateAnthropic(w, resp.Body.Body, outputModel)
 		return
 	}
@@ -329,15 +316,15 @@ func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
-		return
-	}
-
 	var req types.AnthropicCountTokensRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON body")
+	if _, ok := parseJSONRequest(
+		w,
+		r,
+		&req,
+		writeAnthropicInvalidRequest,
+		"Failed to read request body",
+		"Invalid JSON body",
+	); !ok {
 		return
 	}
 

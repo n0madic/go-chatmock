@@ -41,7 +41,6 @@ func TestReadWriteAuthFile(t *testing.T) {
 	os.Setenv("CHATGPT_LOCAL_HOME", tmpDir)
 
 	af := &AuthFile{
-		APIKey: "sk-test",
 		Tokens: TokenData{
 			IDToken:      "id.tok.en",
 			AccessToken:  "access.tok.en",
@@ -66,9 +65,6 @@ func TestReadWriteAuthFile(t *testing.T) {
 	read, err := ReadAuthFile()
 	if err != nil {
 		t.Fatalf("ReadAuthFile failed: %v", err)
-	}
-	if read.APIKey != af.APIKey {
-		t.Errorf("APIKey mismatch: %s vs %s", read.APIKey, af.APIKey)
 	}
 	if read.Tokens.AccountID != af.Tokens.AccountID {
 		t.Errorf("AccountID mismatch: %s vs %s", read.Tokens.AccountID, af.Tokens.AccountID)

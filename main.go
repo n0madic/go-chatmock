@@ -147,7 +147,6 @@ func cmdServe() int {
 	fs.StringVar(&cfg.Host, "host", cfg.Host, "Bind host")
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "Listen port")
 	fs.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "Enable verbose logging")
-	fs.BoolVar(&cfg.VerboseObfuscation, "verbose-obfuscation", cfg.VerboseObfuscation, "Dump raw SSE events")
 	fs.StringVar(&cfg.ReasoningEffort, "reasoning-effort", cfg.ReasoningEffort, "Reasoning effort level (minimal|low|medium|high|xhigh)")
 	fs.StringVar(&cfg.ReasoningSummary, "reasoning-summary", cfg.ReasoningSummary, "Reasoning summary (auto|concise|detailed|none)")
 	fs.StringVar(&cfg.ReasoningCompat, "reasoning-compat", cfg.ReasoningCompat, "Reasoning compat mode (think-tags|o3|legacy|current)")

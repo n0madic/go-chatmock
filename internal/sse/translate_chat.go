@@ -15,7 +15,6 @@ import (
 // TranslateChatOptions holds options for SSE chat translation.
 type TranslateChatOptions struct {
 	ReasoningCompat string
-	Verbose         bool
 	IncludeUsage    bool
 }
 

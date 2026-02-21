@@ -104,17 +104,13 @@ func (s *Server) ExchangeCode(ctx context.Context, code string) (*auth.AuthFile,
 	refreshToken := token.RefreshToken
 
 	idClaims, _ := auth.ParseJWTClaims(idToken)
-	accessClaims, _ := auth.ParseJWTClaims(accessToken)
 
 	var accountID string
 	if authObj, ok := idClaims["https://api.openai.com/auth"].(map[string]any); ok {
 		accountID, _ = authObj["chatgpt_account_id"].(string)
 	}
 
-	apiKey, _ := s.maybeObtainAPIKey(idClaims, accessClaims, idToken)
-
 	af := &auth.AuthFile{
-		APIKey: apiKey,
 		Tokens: auth.TokenData{
 			IDToken:      idToken,
 			AccessToken:  accessToken,
@@ -125,24 +121,4 @@ func (s *Server) ExchangeCode(ctx context.Context, code string) (*auth.AuthFile,
 	}
 
 	return af, nil
-}
-
-func (s *Server) maybeObtainAPIKey(idClaims, accessClaims map[string]any, idToken string) (string, error) {
-	orgID, _ := idClaims["organization_id"].(string)
-	projectID, _ := idClaims["project_id"].(string)
-
-	if orgID == "" || projectID == "" {
-		return "", nil
-	}
-
-	today := time.Now().UTC().Format("2006-01-02")
-	name := fmt.Sprintf("ChatGPT Local [auto-generated] (%s)", today)
-
-	tokenURL := s.OAuthConfig.Endpoint.TokenURL
-	apiKey, err := auth.TokenExchange(tokenURL, s.OAuthConfig.ClientID, idToken, name)
-	if err != nil {
-		slog.Warn("API key exchange failed", "error", err)
-		return "", err
-	}
-	return apiKey, nil
 }

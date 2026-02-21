@@ -13,7 +13,6 @@ import (
 // TranslateOllamaOptions holds options for Ollama SSE translation.
 type TranslateOllamaOptions struct {
 	ReasoningCompat string
-	Verbose         bool
 }
 
 // TranslateOllama reads upstream SSE events and writes Ollama NDJSON chunks.
