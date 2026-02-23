@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/n0madic/go-chatmock/internal/config"
 	"github.com/n0madic/go-chatmock/internal/types"
 )
 
@@ -106,4 +107,50 @@ func firstText(items []types.ResponsesInputItem) string {
 		}
 	}
 	return ""
+}
+
+func TestComposeInstructionsForRouteChatPrefersClientInstructions(t *testing.T) {
+	s := &Server{
+		Config: &config.ServerConfig{
+			BaseInstructions:  "base instructions",
+			CodexInstructions: "codex instructions",
+		},
+	}
+
+	got := composeInstructionsForRoute(
+		s,
+		universalRouteChat,
+		"gpt-5.3-codex",
+		"client instructions",
+		"input system instructions",
+		"",
+	)
+
+	want := "client instructions\n\ninput system instructions"
+	if got != want {
+		t.Fatalf("composeInstructionsForRoute(chat) = %q, want %q", got, want)
+	}
+}
+
+func TestComposeInstructionsForRouteChatFallsBackToBasePrompt(t *testing.T) {
+	s := &Server{
+		Config: &config.ServerConfig{
+			BaseInstructions:  "base instructions",
+			CodexInstructions: "codex instructions",
+		},
+	}
+
+	got := composeInstructionsForRoute(
+		s,
+		universalRouteChat,
+		"gpt-5.3-codex",
+		"",
+		"",
+		"",
+	)
+
+	want := "codex instructions"
+	if got != want {
+		t.Fatalf("composeInstructionsForRoute(chat base fallback) = %q, want %q", got, want)
+	}
 }

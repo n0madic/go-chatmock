@@ -633,8 +633,13 @@ func composeInstructionsForRoute(
 		}
 		return instructions
 	default:
-		base := s.Config.InstructionsForModel(model)
-		return joinNonEmpty("\n\n", strings.TrimSpace(base), strings.TrimSpace(clientInstructions), strings.TrimSpace(inputSystemInstructions))
+		client := joinNonEmpty("\n\n", strings.TrimSpace(clientInstructions), strings.TrimSpace(inputSystemInstructions))
+		// Avoid mixing proxy Codex prompt with client-provided system instructions:
+		// IDE agents (e.g. Cursor) already send their own orchestration prompt.
+		if client != "" {
+			return client
+		}
+		return strings.TrimSpace(s.Config.InstructionsForModel(model))
 	}
 }
 
