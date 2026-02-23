@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,147 +17,7 @@ import (
 )
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	body, ok := readLimitedRequestBody(w, r, writeError, "Failed to read request body")
-	if !ok {
-		return
-	}
-
-	var req types.ChatCompletionRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		// Try stripping newlines
-		cleaned := strings.ReplaceAll(strings.ReplaceAll(string(body), "\r", ""), "\n", "")
-		if err := json.Unmarshal([]byte(cleaned), &req); err != nil {
-			writeError(w, http.StatusBadRequest, "Invalid JSON body")
-			return
-		}
-	}
-
-	requestedModel := req.Model
-	model := models.NormalizeModelName(requestedModel, s.Config.DebugModel)
-
-	if !s.validateModel(w, model) {
-		return
-	}
-
-	messages := req.Messages
-	usedPromptFallback := false
-	usedInputFallback := false
-	if messages == nil {
-		// Try prompt or input fallback
-		if req.Prompt != "" {
-			messages = []types.ChatMessage{{Role: "user", Content: req.Prompt}}
-			usedPromptFallback = true
-		} else {
-			// Try raw payload for "input" field
-			var raw map[string]any
-			json.Unmarshal(body, &raw)
-			if input, ok := raw["input"].(string); ok {
-				messages = []types.ChatMessage{{Role: "user", Content: input}}
-				usedInputFallback = true
-			}
-		}
-		if messages == nil {
-			writeError(w, http.StatusBadRequest, "Request must include messages: []")
-			return
-		}
-	}
-
-	// Convert system message to user message
-	convertSystemToUser(messages)
-
-	isStream := req.Stream
-	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-
-	// Tools
-	toolsResponses := transform.ToolsChatToResponses(req.Tools)
-	toolChoice := req.ToolChoice
-	if toolChoice == nil {
-		toolChoice = "auto"
-	}
-	parallelToolCalls := req.ParallelToolCalls
-
-	// Passthrough responses_tools (web_search)
-	extraTools, hadResponsesTools := s.extractResponsesTools(req.ResponsesTools, req.ResponsesToolChoice)
-	if extraTools == nil && hadResponsesTools {
-		writeError(w, http.StatusBadRequest, "Only web_search/web_search_preview are supported in responses_tools")
-		return
-	}
-	if len(extraTools) > 0 {
-		toolsResponses = append(toolsResponses, extraTools...)
-	}
-	defaultWebSearchApplied := req.ResponsesTools == nil && len(extraTools) > 0 && s.Config.DefaultWebSearch && req.ResponsesToolChoice != "none"
-
-	if rtc := req.ResponsesToolChoice; rtc == "auto" || rtc == "none" {
-		toolChoice = rtc
-	}
-
-	inputItems := transform.ChatMessagesToResponsesInput(messages)
-	if len(inputItems) == 0 {
-		if req.Prompt != "" {
-			inputItems = []types.ResponsesInputItem{
-				{Type: "message", Role: "user", Content: []types.ResponsesContent{{Type: "input_text", Text: req.Prompt}}},
-			}
-		}
-	}
-
-	reasoningParam := buildReasoningWithModelFallback(s.Config, requestedModel, model, req.Reasoning)
-	reasoningEffort, reasoningSummary := reasoningLogFields(reasoningParam)
-	if s.Config.Verbose {
-		slog.Info("openai.chat.request",
-			"requested_model", requestedModel,
-			"upstream_model", model,
-			"stream", isStream,
-			"include_usage", includeUsage,
-			"messages", len(messages),
-			"input_items", len(inputItems),
-			"tools", len(toolsResponses),
-			"tool_choice", summarizeToolChoice(toolChoice),
-			"responses_tools", len(extraTools),
-			"default_web_search", defaultWebSearchApplied,
-			"parallel_tool_calls", parallelToolCalls,
-			"reasoning_effort", reasoningEffort,
-			"reasoning_summary", reasoningSummary,
-			"prompt_fallback", usedPromptFallback,
-			"input_fallback", usedInputFallback,
-			"session_override", strings.TrimSpace(r.Header.Get("X-Session-Id")) != "",
-		)
-	}
-
-	upReq := &upstream.Request{
-		Model:             model,
-		Instructions:      s.Config.InstructionsForModel(model),
-		InputItems:        inputItems,
-		Tools:             toolsResponses,
-		ToolChoice:        toolChoice,
-		ParallelToolCalls: parallelToolCalls,
-		Store:             types.BoolPtr(false),
-		ReasoningParam:    reasoningParam,
-		SessionID:         r.Header.Get("X-Session-Id"),
-	}
-
-	baseTools := transform.ToolsChatToResponses(req.Tools)
-	resp, ok := s.doUpstreamWithResponsesToolsRetry(r.Context(), w, upReq, hadResponsesTools, baseTools, writeError)
-	if !ok {
-		return
-	}
-
-	created := time.Now().Unix()
-	outputModel := requestedModel
-	if outputModel == "" {
-		outputModel = model
-	}
-
-	if isStream {
-		writeSSEHeaders(w, resp.StatusCode)
-		sse.TranslateChat(w, resp.Body.Body, outputModel, created, sse.TranslateChatOptions{
-			ReasoningCompat: s.Config.ReasoningCompat,
-			IncludeUsage:    includeUsage,
-		})
-		return
-	}
-
-	// Non-streaming: collect full response
-	s.collectChatCompletion(w, resp, outputModel, created)
+	s.handleUnifiedCompletions(w, r, universalRouteChat)
 }
 
 func (s *Server) collectChatCompletion(w http.ResponseWriter, resp *upstream.Response, model string, created int64) {
@@ -366,23 +225,4 @@ func (s *Server) extractResponsesTools(responsesTools []any, responsesToolChoice
 	}
 
 	return extraTools, len(extraTools) > 0
-}
-
-func convertSystemToUser(messages []types.ChatMessage) {
-	for i, m := range messages {
-		if m.Role == "system" {
-			messages[i] = types.ChatMessage{Role: "user", Content: m.Content}
-			if i > 0 {
-				msg := messages[i]
-				copy(messages[1:i+1], messages[:i])
-				messages[0] = msg
-			}
-			return
-		}
-	}
-}
-
-func boolVal(m map[string]any, key string) bool {
-	v, _ := m[key].(bool)
-	return v
 }

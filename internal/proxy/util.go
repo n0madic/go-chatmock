@@ -283,6 +283,93 @@ func responseIDFromEvent(data map[string]any) string {
 	return stringFromAny(resp["id"])
 }
 
+func convertSystemToUser(messages []types.ChatMessage) {
+	for i, m := range messages {
+		if m.Role == "system" {
+			messages[i] = types.ChatMessage{Role: "user", Content: m.Content}
+			if i > 0 {
+				msg := messages[i]
+				copy(messages[1:i+1], messages[:i])
+				messages[0] = msg
+			}
+			return
+		}
+	}
+}
+
+func boolVal(m map[string]any, key string) bool {
+	v, _ := m[key].(bool)
+	return v
+}
+
+func parseResponsesInputFromRaw(rawInput any) ([]types.ResponsesInputItem, string, bool) {
+	if rawInput == nil {
+		return nil, "", false
+	}
+	inputBytes, err := json.Marshal(rawInput)
+	if err != nil {
+		return nil, "", false
+	}
+	req := types.ResponsesRequest{Input: inputBytes}
+	items, err := req.ParseInput()
+	if err != nil {
+		return nil, "", false
+	}
+	items, systemInstructions := moveResponsesSystemMessagesToInstructions(items)
+	return items, systemInstructions, true
+}
+
+func parseResponsesStyleToolsFromRaw(rawTools any) []types.ResponsesTool {
+	toolsSlice, ok := rawTools.([]any)
+	if !ok || len(toolsSlice) == 0 {
+		return nil
+	}
+	// Responses-style tools have top-level name/parameters fields.
+	hasTopLevelName := false
+	for _, raw := range toolsSlice {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, _ := m["name"].(string); name != "" {
+			hasTopLevelName = true
+			break
+		}
+	}
+	if !hasTopLevelName {
+		return nil
+	}
+	toolBytes, err := json.Marshal(toolsSlice)
+	if err != nil {
+		return nil
+	}
+	var parsed []types.ResponsesTool
+	if err := json.Unmarshal(toolBytes, &parsed); err != nil {
+		return nil
+	}
+	var out []types.ResponsesTool
+	for _, t := range parsed {
+		switch t.Type {
+		case "function":
+			if strings.TrimSpace(t.Name) == "" {
+				continue
+			}
+			if t.Parameters == nil {
+				t.Parameters = map[string]any{"type": "object", "properties": map[string]any{}}
+			}
+			if t.Strict == nil {
+				t.Strict = types.BoolPtr(false)
+			}
+		case "web_search", "web_search_preview":
+			// pass through
+		default:
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 // retryIfStoreUnsupported retries upstream requests after removing the "store"
 // parameter when upstream rejects it as unsupported.
 func (s *Server) retryIfStoreUnsupported(
@@ -350,15 +437,13 @@ func (s *Server) doWithRetry(
 	baseTools []types.ResponsesTool,
 	writeErrFn func(http.ResponseWriter, int, string),
 ) (*upstream.Response, bool) {
+	errBody, _ := io.ReadAll(resp.Body.Body)
+	resp.Body.Body.Close()
+
+	latestStatus := resp.StatusCode
 	if hadResponsesTools {
 		upReq.Tools = baseTools
 		resp2, err2 := s.upstreamClient.Do(ctx, upReq)
-		if err2 == nil && resp2.StatusCode < 400 {
-			limits.RecordFromResponse(resp2.Headers)
-			resp.Body.Body.Close()
-			return resp2, true
-		}
-		resp.Body.Body.Close()
 		if err2 != nil {
 			writeErrFn(w, http.StatusBadGateway, "Upstream retry failed after removing responses_tools: "+err2.Error())
 			return nil, false
@@ -367,13 +452,37 @@ func (s *Server) doWithRetry(
 			writeErrFn(w, http.StatusBadGateway, "Upstream retry failed after removing responses_tools: empty response")
 			return nil, false
 		}
-		errBody, _ := io.ReadAll(resp2.Body.Body)
+		limits.RecordFromResponse(resp2.Headers)
+		if resp2.StatusCode < 400 {
+			return resp2, true
+		}
+		latestStatus = resp2.StatusCode
+		errBody, _ = io.ReadAll(resp2.Body.Body)
 		resp2.Body.Body.Close()
-		writeErrFn(w, resp2.StatusCode, formatUpstreamError(resp2.StatusCode, errBody))
-		return nil, false
 	}
-	errBody, _ := io.ReadAll(resp.Body.Body)
-	resp.Body.Body.Close()
-	writeErrFn(w, resp.StatusCode, formatUpstreamError(resp.StatusCode, errBody))
+
+	if upReq.Store != nil && isUnsupportedParameterError(errBody, "store") {
+		slog.Warn("upstream rejected store parameter; retrying without store")
+		upReq.Store = nil
+
+		resp3, err3 := s.upstreamClient.Do(ctx, upReq)
+		if err3 != nil {
+			writeErrFn(w, http.StatusBadGateway, "Upstream retry failed after removing store: "+err3.Error())
+			return nil, false
+		}
+		if resp3 == nil {
+			writeErrFn(w, http.StatusBadGateway, "Upstream retry failed after removing store: empty response")
+			return nil, false
+		}
+		limits.RecordFromResponse(resp3.Headers)
+		if resp3.StatusCode < 400 {
+			return resp3, true
+		}
+		latestStatus = resp3.StatusCode
+		errBody, _ = io.ReadAll(resp3.Body.Body)
+		resp3.Body.Body.Close()
+	}
+
+	writeErrFn(w, latestStatus, formatUpstreamError(latestStatus, errBody))
 	return nil, false
 }

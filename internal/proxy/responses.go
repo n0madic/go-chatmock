@@ -3,14 +3,10 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/n0madic/go-chatmock/internal/limits"
-	"github.com/n0madic/go-chatmock/internal/models"
 	"github.com/n0madic/go-chatmock/internal/responses-state"
 	"github.com/n0madic/go-chatmock/internal/sse"
 	"github.com/n0madic/go-chatmock/internal/types"
@@ -18,158 +14,7 @@ import (
 )
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
-	var req types.ResponsesRequest
-	if _, ok := parseJSONRequest(w, r, &req, writeError, "Failed to read request body", "Invalid JSON body"); !ok {
-		return
-	}
-
-	inputItems, err := req.ParseInput()
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid input field")
-		return
-	}
-	inputItems, systemInstructions := moveResponsesSystemMessagesToInstructions(inputItems)
-	inputItems, err = s.restoreFunctionCallContext(inputItems, req.PreviousResponseID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	requestedModel := req.Model
-	model := models.NormalizeModelName(requestedModel, s.Config.DebugModel)
-
-	if !s.validateModel(w, model) {
-		return
-	}
-
-	// Reasoning
-	reasoningParam := buildReasoningWithModelFallback(s.Config, requestedModel, model, req.Reasoning)
-
-	// Responses API should use client-provided instructions only. We also move
-	// system-role input messages into instructions for upstream compatibility.
-	instructions := strings.TrimSpace(req.Instructions)
-	if systemInstructions != "" {
-		if instructions != "" {
-			instructions = instructions + "\n\n" + systemInstructions
-		} else {
-			instructions = systemInstructions
-		}
-	}
-	if req.PreviousResponseID != "" && instructions == "" {
-		if prevInstructions, ok := s.responsesState.GetInstructions(req.PreviousResponseID); ok {
-			instructions = prevInstructions
-		}
-	}
-
-	// Tools: pass through directly; apply default web search if none provided
-	tools := req.Tools
-	defaultWebSearchApplied := false
-	if tools == nil && s.Config.DefaultWebSearch {
-		toolChoiceStr, _ := req.ToolChoice.(string)
-		if toolChoiceStr != "none" {
-			tools = []types.ResponsesTool{{Type: "web_search"}}
-			defaultWebSearchApplied = true
-		}
-	}
-
-	toolChoice := req.ToolChoice
-	if toolChoice == nil {
-		toolChoice = "auto"
-	}
-
-	parallelToolCalls := false
-	if req.ParallelToolCalls != nil {
-		parallelToolCalls = *req.ParallelToolCalls
-	}
-
-	storeForUpstream, storeForced := normalizeStoreForUpstream(req.Store)
-	if storeForced && s.Config.Verbose {
-		slog.Warn("client requested store=true; forcing store=false for upstream compatibility")
-	}
-	reasoningEffort, reasoningSummary := reasoningLogFields(reasoningParam)
-	if s.Config.Verbose {
-		slog.Info("responses.request",
-			"requested_model", requestedModel,
-			"upstream_model", model,
-			"stream", req.Stream,
-			"input_items", len(inputItems),
-			"tools", len(tools),
-			"tool_choice", summarizeToolChoice(toolChoice),
-			"parallel_tool_calls", parallelToolCalls,
-			"include_count", len(req.Include),
-			"instructions_chars", len(instructions),
-			"previous_response_id", strings.TrimSpace(req.PreviousResponseID) != "",
-			"store_requested", boolPtrState(req.Store),
-			"store_upstream", boolPtrState(storeForUpstream),
-			"default_web_search", defaultWebSearchApplied,
-			"reasoning_effort", reasoningEffort,
-			"reasoning_summary", reasoningSummary,
-			"session_override", strings.TrimSpace(r.Header.Get("X-Session-Id")) != "",
-		)
-	}
-
-	upReq := &upstream.Request{
-		Model:             model,
-		Instructions:      instructions,
-		InputItems:        inputItems,
-		Tools:             tools,
-		ToolChoice:        toolChoice,
-		ParallelToolCalls: parallelToolCalls,
-		Include:           req.Include,
-		Store:             storeForUpstream,
-		ReasoningParam:    reasoningParam,
-		SessionID:         r.Header.Get("X-Session-Id"),
-	}
-
-	resp, err := s.upstreamClient.Do(r.Context(), upReq)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-
-	limits.RecordFromResponse(resp.Headers)
-
-	if resp.StatusCode >= 400 {
-		resp2, errBody, retried, retryErr := s.retryIfStoreUnsupported(
-			r.Context(),
-			resp,
-			upReq,
-			"upstream rejected store parameter; retrying without store",
-		)
-		if retried {
-			if retryErr != nil {
-				writeError(w, http.StatusBadGateway, "Upstream retry failed after removing store: "+retryErr.Error())
-				return
-			}
-			if resp2.StatusCode >= 400 {
-				errBody2, _ := io.ReadAll(resp2.Body.Body)
-				resp2.Body.Body.Close()
-				writeError(w, resp2.StatusCode, formatUpstreamError(resp2.StatusCode, errBody2))
-				return
-			}
-			resp = resp2
-		} else {
-			if resp.StatusCode == http.StatusBadRequest && isToolCallOutputNotFoundError(errBody) {
-				writeError(w, resp.StatusCode, formatUpstreamError(resp.StatusCode, errBody)+". Hint: send previous_response_id from the response that created this tool call, or include matching function_call items in input.")
-				return
-			}
-			writeError(w, resp.StatusCode, formatUpstreamError(resp.StatusCode, errBody))
-			return
-		}
-	}
-
-	outputModel := requestedModel
-	if outputModel == "" {
-		outputModel = model
-	}
-
-	if req.Stream {
-		writeSSEHeaders(w, resp.StatusCode)
-		s.streamResponsesWithState(w, resp, inputItems, instructions)
-		return
-	}
-
-	s.collectResponsesResponse(w, resp, outputModel, inputItems, instructions)
+	s.handleUnifiedCompletions(w, r, universalRouteResponses)
 }
 
 func (s *Server) collectResponsesResponse(w http.ResponseWriter, resp *upstream.Response, model string, requestInput []types.ResponsesInputItem, instructions string) {
