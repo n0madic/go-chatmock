@@ -50,14 +50,7 @@ func (s *Server) collectResponsesResponse(
 				createdAt = int64(ca)
 			}
 			if u, ok := r["usage"].(map[string]any); ok {
-				usageObj = &types.ResponsesUsage{
-					InputTokens:  types.IntFromAny(u["input_tokens"]),
-					OutputTokens: types.IntFromAny(u["output_tokens"]),
-					TotalTokens:  types.IntFromAny(u["total_tokens"]),
-				}
-				if usageObj.TotalTokens == 0 {
-					usageObj.TotalTokens = usageObj.InputTokens + usageObj.OutputTokens
-				}
+				usageObj = mergeResponsesUsage(usageObj, u)
 			}
 		}
 
@@ -110,6 +103,41 @@ done:
 		Usage:     usageObj,
 	}
 	writeJSON(w, resp.StatusCode, result)
+}
+
+func mergeResponsesUsage(current *types.ResponsesUsage, usage map[string]any) *types.ResponsesUsage {
+	if len(usage) == 0 {
+		return current
+	}
+
+	_, hasInput := usage["input_tokens"]
+	_, hasOutput := usage["output_tokens"]
+	totalRaw, hasTotal := usage["total_tokens"]
+	if !hasInput && !hasOutput && !hasTotal {
+		return current
+	}
+
+	if current == nil {
+		current = &types.ResponsesUsage{}
+	}
+
+	if hasInput {
+		current.InputTokens = types.IntFromAny(usage["input_tokens"])
+	}
+	if hasOutput {
+		current.OutputTokens = types.IntFromAny(usage["output_tokens"])
+	}
+	if hasTotal {
+		current.TotalTokens = types.IntFromAny(totalRaw)
+	} else if hasInput || hasOutput {
+		// Preserve fallback behavior when total_tokens is absent.
+		current.TotalTokens = current.InputTokens + current.OutputTokens
+	}
+	if current.TotalTokens == 0 {
+		current.TotalTokens = current.InputTokens + current.OutputTokens
+	}
+
+	return current
 }
 
 func (s *Server) streamResponsesWithState(

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -113,5 +114,47 @@ data: {"type":"response.completed","response":{"id":"resp_456","created_at":1730
 	body := w.Body.String()
 	if !strings.Contains(body, `"id":"resp_456"`) {
 		t.Fatalf("expected response id in JSON output, got %q", body)
+	}
+}
+
+func TestCollectResponsesResponseMergesUsageFromCompletedEvent(t *testing.T) {
+	s := &Server{responsesState: responsesstate.NewStore(5*time.Minute, 100)}
+
+	stream := `data: {"type":"response.created","response":{"id":"resp_usage","created_at":1730000000,"usage":{"input_tokens":4}}}
+
+data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}}
+
+data: {"type":"response.completed","response":{"id":"resp_usage","usage":{"output_tokens":6}}}
+`
+	resp := &upstream.Response{
+		StatusCode: 200,
+		Body:       &http.Response{Body: io.NopCloser(strings.NewReader(stream))},
+	}
+	w := httptest.NewRecorder()
+
+	s.collectResponsesResponse(w, resp, "gpt-5", nil, "", "")
+
+	var out types.ResponsesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v body=%q", err, w.Body.String())
+	}
+
+	if out.ID != "resp_usage" {
+		t.Fatalf("expected response id resp_usage, got %q", out.ID)
+	}
+	if len(out.Output) != 1 || out.Output[0].Type != "message" {
+		t.Fatalf("expected output item from response.output_item.done, got %+v", out.Output)
+	}
+	if out.Usage == nil {
+		t.Fatal("expected usage in non-stream response")
+	}
+	if out.Usage.InputTokens != 4 {
+		t.Fatalf("input_tokens: got %d, want %d", out.Usage.InputTokens, 4)
+	}
+	if out.Usage.OutputTokens != 6 {
+		t.Fatalf("output_tokens: got %d, want %d", out.Usage.OutputTokens, 6)
+	}
+	if out.Usage.TotalTokens != 10 {
+		t.Fatalf("total_tokens: got %d, want %d", out.Usage.TotalTokens, 10)
 	}
 }

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/n0madic/go-chatmock/internal/config"
@@ -152,5 +153,36 @@ func TestComposeInstructionsForRouteChatFallsBackToBasePrompt(t *testing.T) {
 	want := "codex instructions"
 	if got != want {
 		t.Fatalf("composeInstructionsForRoute(chat base fallback) = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeUniversalRequestResponsesDebugModelBypassesValidation(t *testing.T) {
+	s := &Server{
+		Config: &config.ServerConfig{
+			DebugModel: "gpt-5",
+		},
+	}
+
+	req, nerr := s.normalizeUniversalRequest([]byte(`{
+		"model":"unknown-model",
+		"input":"hello",
+		"stream":false
+	}`), universalRouteResponses)
+	if nerr != nil {
+		t.Fatalf("normalizeUniversalRequest returned error: %+v", nerr)
+	}
+	if req.RequestedModel != "unknown-model" {
+		t.Fatalf("requested model: got %q, want %q", req.RequestedModel, "unknown-model")
+	}
+	if req.Model != "gpt-5" {
+		t.Fatalf("normalized model: got %q, want %q", req.Model, "gpt-5")
+	}
+
+	w := httptest.NewRecorder()
+	if ok := s.validateModel(w, req.Model); !ok {
+		t.Fatal("validateModel should pass when debug model is configured")
+	}
+	if body := w.Body.String(); body != "" {
+		t.Fatalf("expected empty validation body, got %q", body)
 	}
 }
