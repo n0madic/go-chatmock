@@ -2,9 +2,11 @@ package proxy
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/n0madic/go-chatmock/internal/auth"
@@ -22,6 +24,8 @@ type Server struct {
 	Registry       *models.Registry
 	responsesState *responsesstate.Store
 }
+
+const serverAccessTokenError = "Invalid or missing server access token"
 
 // New creates a new proxy server with all routes registered.
 func New(cfg *config.ServerConfig) *Server {
@@ -65,7 +69,7 @@ func New(cfg *config.ServerConfig) *Server {
 	// OPTIONS for CORS preflight
 	mux.HandleFunc("OPTIONS /", s.handleOptions)
 
-	handler := s.corsMiddleware(s.verboseMiddleware(mux))
+	handler := s.corsMiddleware(s.authMiddleware(s.verboseMiddleware(mux)))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	s.httpServer = &http.Server{
@@ -118,6 +122,62 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		expectedToken := ""
+		if s.Config != nil {
+			expectedToken = strings.TrimSpace(s.Config.AccessToken)
+		}
+		if expectedToken == "" || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		switch r.URL.Path {
+		case "/", "/health":
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !requiresAccessToken(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		header := strings.TrimSpace(r.Header.Get("Authorization"))
+		token, ok := parseBearerAuthToken(header)
+		if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) != 1 {
+			s.writeAccessTokenAuthError(w, r)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) writeAccessTokenAuthError(w http.ResponseWriter, r *http.Request) {
+	if isAnthropicRequest(r) {
+		writeAnthropicError(w, http.StatusUnauthorized, "authentication_error", serverAccessTokenError)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		writeOllamaError(w, http.StatusUnauthorized, serverAccessTokenError)
+		return
+	}
+	writeError(w, http.StatusUnauthorized, serverAccessTokenError)
+}
+
+func parseBearerAuthToken(header string) (string, bool) {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || parts[0] != "Bearer" || strings.TrimSpace(parts[1]) == "" {
+		return "", false
+	}
+	return parts[1], true
+}
+
+func requiresAccessToken(path string) bool {
+	return strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/api/")
 }
 
 func (s *Server) verboseMiddleware(next http.Handler) http.Handler {

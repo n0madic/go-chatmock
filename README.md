@@ -57,6 +57,7 @@ The server listens on `http://127.0.0.1:8000` by default.
 ./go-chatmock serve --host 0.0.0.0 --port 9000 --verbose
 ./go-chatmock serve --reasoning-effort high --reasoning-summary detailed
 ./go-chatmock serve --expose-reasoning-models --enable-web-search
+./go-chatmock serve --access-token my-local-token
 ```
 
 | Flag | Default | Description |
@@ -64,6 +65,7 @@ The server listens on `http://127.0.0.1:8000` by default.
 | `--host` | `127.0.0.1` | Bind address |
 | `--port` | `8000` | Listen port |
 | `--verbose` | `false` | Log structured request/upstream summaries |
+| `--access-token` | | Require `Authorization: Bearer <token>` on API routes (except `/` and `/health`) |
 | `--reasoning-effort` | `medium` | Default reasoning effort (`minimal`, `low`, `medium`, `high`, `xhigh`) |
 | `--reasoning-summary` | `auto` | Reasoning summary mode (`auto`, `concise`, `detailed`, `none`) |
 | `--reasoning-compat` | `think-tags` | Reasoning output format (`think-tags`, `o3`, `legacy`) |
@@ -78,6 +80,7 @@ All flags can also be set via environment variables:
 | `CHATGPT_LOCAL_REASONING_EFFORT` | `--reasoning-effort` |
 | `CHATGPT_LOCAL_REASONING_SUMMARY` | `--reasoning-summary` |
 | `CHATGPT_LOCAL_REASONING_COMPAT` | `--reasoning-compat` |
+| `CHATGPT_LOCAL_ACCESS_TOKEN` | `--access-token` |
 | `CHATGPT_LOCAL_DEBUG_MODEL` | `--debug-model` |
 | `CHATGPT_LOCAL_EXPOSE_REASONING_MODELS` | `--expose-reasoning-models` |
 | `CHATGPT_LOCAL_ENABLE_WEB_SEARCH` | `--enable-web-search` |
@@ -148,7 +151,8 @@ curl http://127.0.0.1:8000/v1/chat/completions \
   }'
 ```
 
-The `Authorization` header value is ignored — authentication uses the stored ChatGPT tokens.
+When `--access-token` is not set, the `Authorization` header value is ignored and authentication uses stored ChatGPT tokens.
+When `--access-token` is set, all API routes except `/` and `/health` require `Authorization: Bearer <token>`.
 
 ## Features
 
@@ -174,6 +178,9 @@ For Anthropic-compatible routes, include:
 - `anthropic-version: 2023-06-01` (required)
 - auth header (required; validated only for presence):
   `x-api-key: <any non-empty value>` or `Authorization: Bearer <token>`
+
+If `--access-token` (or `CHATGPT_LOCAL_ACCESS_TOKEN`) is set, a matching
+`Authorization: Bearer <token>` is required before route-specific validation.
 
 `previous_response_id` is handled locally and not forwarded upstream. The in-memory
 state is cleared on process restart. If a tool loop references an unknown/expired

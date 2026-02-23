@@ -18,6 +18,7 @@ type ServerConfig struct {
 	Host                  string
 	Port                  int
 	Verbose               bool
+	AccessToken           string
 	ReasoningEffort       string
 	ReasoningSummary      string
 	ReasoningCompat       string
@@ -54,6 +55,7 @@ func DefaultFromEnv() *ServerConfig {
 	return &ServerConfig{
 		Host:                  "127.0.0.1",
 		Port:                  8000,
+		AccessToken:           strings.TrimSpace(os.Getenv("CHATGPT_LOCAL_ACCESS_TOKEN")),
 		ReasoningEffort:       envOrDefault("CHATGPT_LOCAL_REASONING_EFFORT", "medium"),
 		ReasoningSummary:      envOrDefault("CHATGPT_LOCAL_REASONING_SUMMARY", "auto"),
 		ReasoningCompat:       envOrDefault("CHATGPT_LOCAL_REASONING_COMPAT", "think-tags"),
