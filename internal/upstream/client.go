@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/n0madic/go-chatmock/internal/auth"
@@ -48,11 +49,13 @@ type Response struct {
 type Client struct {
 	TokenManager *auth.TokenManager
 	Verbose      bool
+	Debug        bool
+	dumpMu       sync.Mutex
 }
 
 // NewClient creates a new upstream client.
-func NewClient(tm *auth.TokenManager, verbose bool) *Client {
-	return &Client{TokenManager: tm, Verbose: verbose}
+func NewClient(tm *auth.TokenManager, verbose, debug bool) *Client {
+	return &Client{TokenManager: tm, Verbose: verbose, Debug: debug}
 }
 
 // Do sends a Responses API request to ChatGPT backend and returns the streaming response.
@@ -135,6 +138,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("upstream ChatGPT request failed: %w", err)
 	}
+	c.dumpUpstreamResponse(resp)
 	if c.Verbose {
 		requestID := upstreamRequestID(resp.Header)
 		attrs := []any{"status", resp.StatusCode}

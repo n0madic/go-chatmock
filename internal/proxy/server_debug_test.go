@@ -71,4 +71,10 @@ func TestDebugMiddlewareDumpsRequestAndPreservesBody(t *testing.T) {
 	if !strings.Contains(rawDumpStr, payload) {
 		t.Fatalf("expected payload in raw dump, got %q", rawDumpStr)
 	}
+	if !strings.Contains(rawDumpStr, "===== INBOUND REQUEST BEGIN =====") {
+		t.Fatalf("expected dump begin delimiter, got %q", rawDumpStr)
+	}
+	if !strings.Contains(rawDumpStr, "===== INBOUND REQUEST END =====") {
+		t.Fatalf("expected dump end delimiter, got %q", rawDumpStr)
+	}
 }

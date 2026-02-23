@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/n0madic/go-chatmock/internal/auth"
@@ -25,6 +26,7 @@ type Server struct {
 	upstreamClient *upstream.Client
 	Registry       *models.Registry
 	responsesState *responsesstate.Store
+	debugDumpMu    sync.Mutex
 }
 
 const serverAccessTokenError = "Invalid or missing server access token"
@@ -32,7 +34,7 @@ const serverAccessTokenError = "Invalid or missing server access token"
 // New creates a new proxy server with all routes registered.
 func New(cfg *config.ServerConfig) *Server {
 	tm := auth.NewTokenManager(config.ClientID(), config.TokenURL())
-	uc := upstream.NewClient(tm, cfg.Verbose)
+	uc := upstream.NewClient(tm, cfg.Verbose, cfg.Debug)
 	reg := models.NewRegistry(tm)
 
 	s := &Server{
@@ -202,17 +204,41 @@ func (s *Server) debugMiddleware(next http.Handler) http.Handler {
 			slog.Error("request.dump.failed", "method", r.Method, "path", r.URL.Path, "error", err)
 		} else {
 			slog.Info("request.dump", "method", r.Method, "path", r.URL.Path)
-			if _, err := os.Stderr.Write(dump); err != nil {
-				slog.Error("request.dump.write.failed", "method", r.Method, "path", r.URL.Path, "error", err)
-			}
-			if len(dump) == 0 || dump[len(dump)-1] != '\n' {
-				if _, err := os.Stderr.Write([]byte("\n")); err != nil {
-					slog.Error("request.dump.write.failed", "method", r.Method, "path", r.URL.Path, "error", err)
-				}
-			}
+			s.writeDebugDumpBlock("INBOUND REQUEST", dump)
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) writeDebugDumpBlock(title string, data []byte) {
+	if s == nil {
+		return
+	}
+	s.debugDumpMu.Lock()
+	defer s.debugDumpMu.Unlock()
+
+	header := "===== " + strings.TrimSpace(title) + " BEGIN =====\n"
+	footer := "===== " + strings.TrimSpace(title) + " END =====\n"
+
+	if _, err := os.Stderr.WriteString(header); err != nil {
+		slog.Error("debug.dump.write.failed", "title", title, "error", err)
+		return
+	}
+	if len(data) > 0 {
+		if _, err := os.Stderr.Write(data); err != nil {
+			slog.Error("debug.dump.write.failed", "title", title, "error", err)
+			return
+		}
+		if data[len(data)-1] != '\n' {
+			if _, err := os.Stderr.WriteString("\n"); err != nil {
+				slog.Error("debug.dump.write.failed", "title", title, "error", err)
+				return
+			}
+		}
+	}
+	if _, err := os.Stderr.WriteString(footer); err != nil {
+		slog.Error("debug.dump.write.failed", "title", title, "error", err)
+	}
 }
 
 // validateModel checks whether model is in the registry, writing a 400 error and

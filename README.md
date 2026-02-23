@@ -66,11 +66,11 @@ The server listens on `http://127.0.0.1:8000` by default.
 | `--host` | `127.0.0.1` | Bind address |
 | `--port` | `8000` | Listen port |
 | `--verbose` | `false` | Log structured request/upstream summaries |
-| `--debug` | `false` | Dump inbound HTTP requests (method, path, headers, body) |
+| `--debug` | `false` | Dump inbound requests and upstream responses (separate blocks; for SSE body logs only `response.completed`) |
 | `--access-token` | | Require `Authorization: Bearer <token>` on API routes (except `/` and `/health`) |
 | `--reasoning-effort` | `medium` | Default reasoning effort (`minimal`, `low`, `medium`, `high`, `xhigh`) |
 | `--reasoning-summary` | `auto` | Reasoning summary mode (`auto`, `concise`, `detailed`, `none`) |
-| `--reasoning-compat` | `think-tags` | Reasoning output format (`think-tags`, `o3`, `legacy`) |
+| `--reasoning-compat` | `think-tags` | Reasoning output format (`think-tags`, `o3`, `legacy`, `current`) |
 | `--debug-model` | | Force a specific model name for all requests |
 | `--expose-reasoning-models` | `false` | Expose effort-level variants as separate models (e.g. `gpt-5-high`) |
 | `--enable-web-search` | `false` | Enable web search tool by default |
@@ -165,7 +165,7 @@ When `--access-token` is set, all API routes except `/` and `/health` require `A
 - **Tool/function calling** support with automatic format translation
 - **Vision/image** support (base64 images in Ollama format are converted automatically)
 - **Reasoning effort** control per-request or globally via server flags
-- **Reasoning summaries** in three compat modes: `think-tags` (wrapped in `<think>` tags), `o3` (structured reasoning object), `legacy` (separate fields)
+- **Reasoning summaries** in four compat modes: `think-tags` (wrapped in `<think>` tags), `o3` (structured reasoning object), `legacy` (separate fields), `current` (alias of `legacy`)
 - **Web search** passthrough via `responses_tools` field
 - **Session-based prompt caching** using deterministic SHA256 fingerprints
 - **Local `previous_response_id` polyfill** for `/v1/responses` tool loops:
@@ -184,6 +184,14 @@ For Anthropic-compatible routes, include:
 
 If `--access-token` (or `CHATGPT_LOCAL_ACCESS_TOKEN`) is set, a matching
 `Authorization: Bearer <token>` is required before route-specific validation.
+
+With `--debug`, logs include explicit dump boundaries:
+
+- `===== INBOUND REQUEST BEGIN/END =====`
+- `===== UPSTREAM RESPONSE BEGIN/END =====`
+- `===== UPSTREAM RESPONSE BODY status=<code> BEGIN/END =====`
+
+For upstream SSE responses, debug body output is reduced to `response.completed` only.
 
 `previous_response_id` is handled locally and not forwarded upstream. The in-memory
 state is cleared on process restart. If a tool loop references an unknown/expired

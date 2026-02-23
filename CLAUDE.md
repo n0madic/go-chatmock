@@ -54,7 +54,7 @@ Client Request (OpenAI, Ollama, or Responses API format)
 
 - **Triple API surface**: OpenAI (`/v1/...`), Ollama (`/api/...`), and native Responses API (`/v1/responses`) routes are registered on the same `ServeMux`. All converge into the same `upstream.Client.Do()` call — the only difference is input/output format translation.
 - **SSE stream translation**: Upstream always returns an SSE stream. The `sse/` package reads it event-by-event and re-emits in the target format. Four translators exist: `TranslateChat` (OpenAI chat), `TranslateText` (OpenAI completions), `TranslateOllama` (Ollama NDJSON), `TranslateResponses` (passthrough for native Responses API).
-- **Reasoning compat modes**: Reasoning output is formatted in one of three modes (`think-tags`, `o3`, `legacy`) controlled by `--reasoning-compat`. The streaming translator in `sse/translate_chat.go` handles each mode differently for `<think>` tag wrapping, structured reasoning objects, or legacy fields.
+- **Reasoning compat modes**: Reasoning output is formatted in one of four modes (`think-tags`, `o3`, `legacy`, `current`) controlled by `--reasoning-compat`. The streaming translator in `sse/translate_chat.go` handles each mode differently for `<think>` tag wrapping, structured reasoning objects, or legacy fields (`current` aliases `legacy`).
 - **Web search retry**: If upstream rejects `responses_tools` (web_search), routes automatically retry without them.
 - **Embedded prompts**: `prompts/prompt.md` and `prompts/prompt_gpt5_codex.md` are embedded at compile time via `go:embed` in `main.go` and passed into `config.ServerConfig`. `InstructionsForModel()` selects the appropriate prompt.
 - **Thread-safe token management**: `auth.TokenManager` uses `sync.Mutex` for concurrent token access and automatic refresh.
@@ -67,7 +67,7 @@ Client Request (OpenAI, Ollama, or Responses API format)
 | `types/` | All shared request/response structs (OpenAI, Ollama, Responses API, errors). No logic. |
 | `proxy/` | HTTP server, CORS middleware, route handlers. `openai.go`, `ollama.go`, and `responses.go` are the main entry points. |
 | `upstream/` | Single function `Client.Do()` that builds and sends the Responses API payload. |
-| `sse/` | SSE line reader + three stream translators. |
+| `sse/` | SSE line reader + stream translators. |
 | `transform/` | Format converters: Chat→Responses, Ollama→OpenAI, tool schemas. |
 | `models/` | Model catalog, alias mapping, effort-level variant generation, allowed efforts per model. `Registry` fetches the live model list from `GET /backend-api/codex/models` with ETag/TTL caching and a static fallback. |
 | `reasoning/` | Reasoning param construction, effort extraction from model names, compat mode formatting for non-streaming responses. |
