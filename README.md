@@ -193,14 +193,6 @@ With `--debug`, logs include explicit dump boundaries:
 
 For upstream SSE responses, debug body output is reduced to `response.completed` only.
 
-`previous_response_id` is handled locally and not forwarded upstream. The in-memory
-state is cleared on process restart. If a tool loop references an unknown/expired
-response ID or missing `call_id`, the proxy returns a descriptive `400` error.
-
-For `/v1/responses`, client `instructions` are passed through as-is, inherited across
-`previous_response_id` chains, and text-only `input` messages with `role: "system"`
-are moved into `instructions` for upstream compatibility.
-
 ## Architecture
 
 ```
