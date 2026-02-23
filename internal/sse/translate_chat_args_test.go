@@ -54,6 +54,30 @@ data: {"type":"response.completed","response":{"id":"resp_tool_delta"}}
 	}
 }
 
+func TestTranslateChatDoesNotDuplicateDeltasWhenIDEqualsCallID(t *testing.T) {
+	stream := `data: {"type":"response.created","response":{"id":"resp_tool_delta_same_id"}}
+
+data: {"type":"response.output_item.added","item":{"type":"function_call","id":"call_shell","call_id":"call_shell","name":"Shell","arguments":"{}"}}
+
+data: {"type":"response.function_call_arguments.delta","item_id":"call_shell","delta":"{\"command\":\"pwd\"}"}
+
+data: {"type":"response.output_item.done","item":{"type":"function_call","id":"call_shell","call_id":"call_shell","name":"Shell","arguments":"{}"}}
+
+data: {"type":"response.completed","response":{"id":"resp_tool_delta_same_id"}}
+`
+
+	w := newFlusherRecorder()
+	TranslateChat(w, io.NopCloser(strings.NewReader(stream)), "gpt-5.3-codex", time.Now().Unix(), TranslateChatOptions{})
+
+	out := w.Body.String()
+	if strings.Contains(out, `{\"command\":\"pwd\"}{\"command\":\"pwd\"}`) {
+		t.Fatalf("unexpected duplicated function_call delta in arguments: %s", out)
+	}
+	if !strings.Contains(out, `"arguments":"{\"command\":\"pwd\"}"`) {
+		t.Fatalf("expected non-duplicated arguments in output, got: %s", out)
+	}
+}
+
 func TestTranslateChatKeepsInvalidFunctionArgumentsRaw(t *testing.T) {
 	stream := `data: {"type":"response.created","response":{"id":"resp_tool_raw"}}
 

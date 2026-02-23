@@ -109,7 +109,7 @@ func (st *chatTranslatorState) handleOutputItemAdded(data map[string]any) {
 
 	itemID := strings.TrimSpace(stringOr(item, "id"))
 	callID := strings.TrimSpace(stringOr(item, "call_id", itemID))
-	if itemID != "" && callID != "" {
+	if itemID != "" && callID != "" && itemID != callID {
 		st.toolItemMap[itemID] = callID
 	}
 
@@ -132,7 +132,7 @@ func (st *chatTranslatorState) handleFunctionCallArgumentsDelta(data map[string]
 		return
 	}
 	st.toolArgBuf[itemID] += delta
-	if callID := strings.TrimSpace(st.toolItemMap[itemID]); callID != "" {
+	if callID := strings.TrimSpace(st.toolItemMap[itemID]); callID != "" && callID != itemID {
 		st.toolArgBuf[callID] += delta
 	}
 }
