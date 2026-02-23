@@ -124,12 +124,11 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 		return nil, err
 	}
 
+	config.ApplyCodexDefaultHeaders(httpReq.Header)
 	httpReq.Header.Set("Authorization", "Bearer "+accessToken)
-	httpReq.Header.Set("User-Agent", config.CodexUserAgent())
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("chatgpt-account-id", accountID)
-	httpReq.Header.Set("OpenAI-Beta", "responses=experimental")
+	httpReq.Header.Set("ChatGPT-Account-ID", accountID)
 	httpReq.Header.Set("session_id", sessionID)
 
 	resp, err := httpClient.Do(httpReq)

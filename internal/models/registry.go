@@ -196,10 +196,10 @@ func (r *Registry) doFetch() error {
 	if err != nil {
 		return err
 	}
+	config.ApplyCodexDefaultHeaders(req.Header)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("User-Agent", config.CodexUserAgent())
 	if accountID != "" {
-		req.Header.Set("chatgpt-account-id", accountID)
+		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
 
 	r.mu.RLock()
