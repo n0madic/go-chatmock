@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httputil"
+	"os"
 	"strings"
 	"time"
 
@@ -69,7 +71,7 @@ func New(cfg *config.ServerConfig) *Server {
 	// OPTIONS for CORS preflight
 	mux.HandleFunc("OPTIONS /", s.handleOptions)
 
-	handler := s.corsMiddleware(s.authMiddleware(s.verboseMiddleware(mux)))
+	handler := s.corsMiddleware(s.authMiddleware(s.verboseMiddleware(s.debugMiddleware(mux))))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	s.httpServer = &http.Server{
@@ -186,6 +188,29 @@ func (s *Server) verboseMiddleware(next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		slog.Info("request", "method", r.Method, "path", r.URL.Path)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) debugMiddleware(next http.Handler) http.Handler {
+	if s.Config == nil || !s.Config.Debug {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dump, err := httputil.DumpRequest(r, true)
+		if err != nil {
+			slog.Error("request.dump.failed", "method", r.Method, "path", r.URL.Path, "error", err)
+		} else {
+			slog.Info("request.dump", "method", r.Method, "path", r.URL.Path)
+			if _, err := os.Stderr.Write(dump); err != nil {
+				slog.Error("request.dump.write.failed", "method", r.Method, "path", r.URL.Path, "error", err)
+			}
+			if len(dump) == 0 || dump[len(dump)-1] != '\n' {
+				if _, err := os.Stderr.Write([]byte("\n")); err != nil {
+					slog.Error("request.dump.write.failed", "method", r.Method, "path", r.URL.Path, "error", err)
+				}
+			}
+		}
 		next.ServeHTTP(w, r)
 	})
 }

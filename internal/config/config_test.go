@@ -23,6 +23,7 @@ func setenv(t *testing.T, key, value string) {
 // when no environment variables are set.
 func TestDefaultFromEnvDefaults(t *testing.T) {
 	for _, key := range []string{
+		"CHATGPT_LOCAL_DEBUG",
 		"CHATGPT_LOCAL_ACCESS_TOKEN",
 		"CHATGPT_LOCAL_REASONING_EFFORT",
 		"CHATGPT_LOCAL_REASONING_SUMMARY",
@@ -41,6 +42,9 @@ func TestDefaultFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.Port != 8000 {
 		t.Errorf("Port: got %d, want 8000", cfg.Port)
+	}
+	if cfg.Debug {
+		t.Error("Debug should be false by default")
 	}
 	if cfg.AccessToken != "" {
 		t.Errorf("AccessToken: got %q, want empty", cfg.AccessToken)
@@ -67,6 +71,7 @@ func TestDefaultFromEnvDefaults(t *testing.T) {
 
 // TestDefaultFromEnvOverrides verifies that environment variables override defaults.
 func TestDefaultFromEnvOverrides(t *testing.T) {
+	setenv(t, "CHATGPT_LOCAL_DEBUG", "yes")
 	setenv(t, "CHATGPT_LOCAL_ACCESS_TOKEN", "secret-token")
 	setenv(t, "CHATGPT_LOCAL_REASONING_EFFORT", "HIGH")
 	setenv(t, "CHATGPT_LOCAL_REASONING_SUMMARY", "DETAILED")
@@ -77,6 +82,9 @@ func TestDefaultFromEnvOverrides(t *testing.T) {
 
 	cfg := DefaultFromEnv()
 
+	if !cfg.Debug {
+		t.Error("Debug should be true when env is 'yes'")
+	}
 	if cfg.AccessToken != "secret-token" {
 		t.Errorf("AccessToken: got %q, want %q", cfg.AccessToken, "secret-token")
 	}

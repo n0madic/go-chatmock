@@ -55,6 +55,7 @@ The server listens on `http://127.0.0.1:8000` by default.
 
 ```bash
 ./go-chatmock serve --host 0.0.0.0 --port 9000 --verbose
+./go-chatmock serve --debug
 ./go-chatmock serve --reasoning-effort high --reasoning-summary detailed
 ./go-chatmock serve --expose-reasoning-models --enable-web-search
 ./go-chatmock serve --access-token my-local-token
@@ -65,6 +66,7 @@ The server listens on `http://127.0.0.1:8000` by default.
 | `--host` | `127.0.0.1` | Bind address |
 | `--port` | `8000` | Listen port |
 | `--verbose` | `false` | Log structured request/upstream summaries |
+| `--debug` | `false` | Dump inbound HTTP requests (method, path, headers, body) |
 | `--access-token` | | Require `Authorization: Bearer <token>` on API routes (except `/` and `/health`) |
 | `--reasoning-effort` | `medium` | Default reasoning effort (`minimal`, `low`, `medium`, `high`, `xhigh`) |
 | `--reasoning-summary` | `auto` | Reasoning summary mode (`auto`, `concise`, `detailed`, `none`) |
@@ -80,6 +82,7 @@ All flags can also be set via environment variables:
 | `CHATGPT_LOCAL_REASONING_EFFORT` | `--reasoning-effort` |
 | `CHATGPT_LOCAL_REASONING_SUMMARY` | `--reasoning-summary` |
 | `CHATGPT_LOCAL_REASONING_COMPAT` | `--reasoning-compat` |
+| `CHATGPT_LOCAL_DEBUG` | `--debug` |
 | `CHATGPT_LOCAL_ACCESS_TOKEN` | `--access-token` |
 | `CHATGPT_LOCAL_DEBUG_MODEL` | `--debug-model` |
 | `CHATGPT_LOCAL_EXPOSE_REASONING_MODELS` | `--expose-reasoning-models` |
