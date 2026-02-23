@@ -88,7 +88,7 @@ type Alias struct {
 	Name      string          `json:"name,omitempty"`
 	Arguments string          `json:"arguments,omitempty"`
 	CallID    string          `json:"call_id,omitempty"`
-	Output    string          `json:"output,omitempty"`
+	Output    json.RawMessage `json:"output,omitempty"`
 }
 
 // UnmarshalJSON implements custom JSON unmarshaling for ResponsesInputItem.
@@ -104,7 +104,7 @@ func (item *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 	item.Name = alias.Name
 	item.Arguments = alias.Arguments
 	item.CallID = alias.CallID
-	item.Output = alias.Output
+	item.Output = parseResponsesOutput(alias.Output)
 
 	if alias.Content != nil {
 		var s string
@@ -128,6 +128,37 @@ func (item *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 	}
 
 	return nil
+}
+
+func parseResponsesOutput(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+
+	var content []ResponsesContent
+	if err := json.Unmarshal(raw, &content); err == nil {
+		var out string
+		for _, c := range content {
+			if c.Text == "" {
+				continue
+			}
+			if out != "" {
+				out += "\n"
+			}
+			out += c.Text
+		}
+		if out != "" {
+			return out
+		}
+	}
+
+	// Preserve compatibility with non-string output values by encoding them.
+	return string(raw)
 }
 
 // ResponsesContent represents a content item in a Responses API input message.

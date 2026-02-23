@@ -151,3 +151,26 @@ func TestParseInputMultipleItems(t *testing.T) {
 		t.Errorf("expected second item role 'assistant', got %q", items[1].Role)
 	}
 }
+
+func TestParseInputFunctionCallOutputArrayOutput(t *testing.T) {
+	raw := `[
+		{"type":"function_call","call_id":"call_1","name":"Shell","arguments":"{}"},
+		{"type":"function_call_output","call_id":"call_1","output":[{"type":"input_text","text":"Error: command required"}]}
+	]`
+	req := &ResponsesRequest{
+		Input: json.RawMessage(raw),
+	}
+	items, err := req.ParseInput()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[1].Type != "function_call_output" {
+		t.Fatalf("expected type function_call_output, got %q", items[1].Type)
+	}
+	if items[1].Output != "Error: command required" {
+		t.Fatalf("expected normalized output text, got %q", items[1].Output)
+	}
+}
