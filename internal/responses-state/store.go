@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	DefaultTTL      = 30 * time.Minute
+	DefaultTTL      = 60 * time.Minute
 	DefaultCapacity = 10000
 )
 

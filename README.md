@@ -170,7 +170,7 @@ When `--access-token` is set, all API routes except `/` and `/health` require `A
 - **Session-based prompt caching** using deterministic SHA256 fingerprints
 - **Local `previous_response_id` polyfill** for `/v1/responses` tool loops:
   go-chatmock stores reconstructed input context and tool calls in memory
-  (TTL 30 minutes, max 10k responses), replays prior context for chained turns,
+  (TTL 60 minutes, max 10k responses), replays prior context for chained turns,
   and re-injects missing `function_call` items when clients send only `function_call_output`
 - **Automatic token refresh** with thread-safe management
 - **Rate limit tracking** — usage snapshots saved to `~/.chatgpt-local/usage_limits.json`, viewable via `info`
