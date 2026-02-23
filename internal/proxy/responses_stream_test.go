@@ -28,7 +28,7 @@ data: {"type":"response.completed","response":{"id":"resp_123"}}
 		{Type: "message", Role: "user", Content: []types.ResponsesContent{{Type: "input_text", Text: "Read README"}}},
 	}
 
-	s.streamResponsesWithState(w, resp, requestInput, "stay in context")
+	s.streamResponsesWithState(w, resp, requestInput, "stay in context", "")
 
 	body := w.Body.String()
 	if !strings.Contains(body, `"type":"response.output_item.done"`) {
@@ -82,7 +82,7 @@ data: {"type":"response.completed","response":{"id":"resp_456","created_at":1730
 		{Type: "message", Role: "user", Content: []types.ResponsesContent{{Type: "input_text", Text: "Find TODO"}}},
 	}
 
-	s.collectResponsesResponse(w, resp, "gpt-5", requestInput, "stay in context")
+	s.collectResponsesResponse(w, resp, "gpt-5", requestInput, "stay in context", "")
 
 	calls, ok := s.responsesState.Get("resp_456")
 	if !ok {

@@ -10,6 +10,7 @@ import (
 	"github.com/n0madic/go-chatmock/internal/limits"
 	"github.com/n0madic/go-chatmock/internal/models"
 	"github.com/n0madic/go-chatmock/internal/reasoning"
+	responsesstate "github.com/n0madic/go-chatmock/internal/responses-state"
 	"github.com/n0madic/go-chatmock/internal/sse"
 	"github.com/n0madic/go-chatmock/internal/transform"
 	"github.com/n0madic/go-chatmock/internal/types"
@@ -20,7 +21,15 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	s.handleUnifiedCompletions(w, r, universalRouteChat)
 }
 
-func (s *Server) collectChatCompletion(w http.ResponseWriter, resp *upstream.Response, model string, created int64) {
+func (s *Server) collectChatCompletion(
+	w http.ResponseWriter,
+	resp *upstream.Response,
+	model string,
+	created int64,
+	requestInput []types.ResponsesInputItem,
+	instructions string,
+	conversationID string,
+) {
 	collected := collectTextResponseFromSSE(resp.Body.Body, collectTextResponseOptions{
 		InitialResponseID: "chatcmpl",
 		CollectUsage:      true,
@@ -50,6 +59,8 @@ func (s *Server) collectChatCompletion(w http.ResponseWriter, resp *upstream.Res
 		},
 		Usage: collected.Usage,
 	}
+
+	storeChatCollectedState(s, collected, requestInput, instructions, conversationID)
 
 	writeJSON(w, resp.StatusCode, completion)
 }
@@ -225,4 +236,50 @@ func (s *Server) extractResponsesTools(responsesTools []any, responsesToolChoice
 	}
 
 	return extraTools, len(extraTools) > 0
+}
+
+func storeChatCollectedState(
+	s *Server,
+	collected collectedTextResponse,
+	requestInput []types.ResponsesInputItem,
+	instructions string,
+	conversationID string,
+) {
+	if s == nil || collected.ResponseID == "" {
+		return
+	}
+
+	var delta []types.ResponsesInputItem
+	if txt := strings.TrimSpace(collected.FullText); txt != "" {
+		delta = append(delta, types.ResponsesInputItem{
+			Type:    "message",
+			Role:    "assistant",
+			Content: []types.ResponsesContent{{Type: "output_text", Text: txt}},
+		})
+	}
+
+	var calls []responsesstate.FunctionCall
+	for _, tc := range collected.ToolCalls {
+		callID := strings.TrimSpace(tc.ID)
+		name := strings.TrimSpace(tc.Function.Name)
+		if callID == "" || name == "" {
+			continue
+		}
+		args := tc.Function.Arguments
+		delta = append(delta, types.ResponsesInputItem{
+			Type:      "function_call",
+			CallID:    callID,
+			Name:      name,
+			Arguments: args,
+		})
+		calls = append(calls, responsesstate.FunctionCall{
+			CallID:    callID,
+			Name:      name,
+			Arguments: args,
+		})
+	}
+
+	s.responsesState.PutSnapshot(collected.ResponseID, appendContextHistory(requestInput, delta), calls)
+	s.responsesState.PutInstructions(collected.ResponseID, instructions)
+	s.responsesState.PutConversationLatest(conversationID, collected.ResponseID)
 }

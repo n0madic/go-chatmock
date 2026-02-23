@@ -1,14 +1,17 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/n0madic/go-chatmock/internal/models"
+	responsesstate "github.com/n0madic/go-chatmock/internal/responses-state"
 	"github.com/n0madic/go-chatmock/internal/sse"
 	"github.com/n0madic/go-chatmock/internal/transform"
 	"github.com/n0madic/go-chatmock/internal/types"
@@ -39,6 +42,8 @@ type universalRequest struct {
 	StoreForUpstream        *bool
 	StoreForced             bool
 	PreviousResponseID      string
+	ConversationID          string
+	AutoPreviousResponseID  bool
 	ReasoningParam          *types.ReasoningParam
 	MessagesCount           int
 	InputSource             string
@@ -91,6 +96,9 @@ func (s *Server) handleUnifiedCompletions(w http.ResponseWriter, r *http.Request
 				"reasoning_summary", reasoningSummary,
 				"prompt_fallback", req.UsedPromptFallback,
 				"input_fallback", req.UsedInputFallback,
+				"previous_response_id", req.PreviousResponseID != "",
+				"previous_response_id_auto", req.AutoPreviousResponseID,
+				"conversation_id", req.ConversationID != "",
 				"session_override", strings.TrimSpace(r.Header.Get("X-Session-Id")) != "",
 			)
 		} else {
@@ -106,6 +114,8 @@ func (s *Server) handleUnifiedCompletions(w http.ResponseWriter, r *http.Request
 				"include_count", len(req.Include),
 				"instructions_chars", len(req.Instructions),
 				"previous_response_id", req.PreviousResponseID != "",
+				"previous_response_id_auto", req.AutoPreviousResponseID,
+				"conversation_id", req.ConversationID != "",
 				"store_requested", boolPtrState(req.StoreRequested),
 				"store_upstream", boolPtrState(req.StoreForUpstream),
 				"default_web_search", req.DefaultWebSearchApplied,
@@ -146,22 +156,25 @@ func (s *Server) handleUnifiedCompletions(w http.ResponseWriter, r *http.Request
 		created := time.Now().Unix()
 		if req.Stream {
 			writeSSEHeaders(w, resp.StatusCode)
-			sse.TranslateChat(w, resp.Body.Body, outputModel, created, sse.TranslateChatOptions{
+			var rawSSE bytes.Buffer
+			streamBody := newTeeReadCloser(resp.Body.Body, &rawSSE)
+			sse.TranslateChat(w, streamBody, outputModel, created, sse.TranslateChatOptions{
 				ReasoningCompat: s.Config.ReasoningCompat,
 				IncludeUsage:    req.IncludeUsage,
 			})
+			s.storeChatStreamState(rawSSE.Bytes(), req.InputItems, req.Instructions, req.ConversationID)
 			return
 		}
-		s.collectChatCompletion(w, resp, outputModel, created)
+		s.collectChatCompletion(w, resp, outputModel, created, req.InputItems, req.Instructions, req.ConversationID)
 		return
 	}
 
 	if req.Stream {
 		writeSSEHeaders(w, resp.StatusCode)
-		s.streamResponsesWithState(w, resp, req.InputItems, req.Instructions)
+		s.streamResponsesWithState(w, resp, req.InputItems, req.Instructions, req.ConversationID)
 		return
 	}
-	s.collectResponsesResponse(w, resp, outputModel, req.InputItems, req.Instructions)
+	s.collectResponsesResponse(w, resp, outputModel, req.InputItems, req.Instructions, req.ConversationID)
 }
 
 func (s *Server) normalizeUniversalRequest(body []byte, route universalRoute) (*universalRequest, *requestNormalizeError) {
@@ -184,12 +197,26 @@ func (s *Server) normalizeUniversalRequest(body []byte, route universalRoute) (*
 		return nil, ierr
 	}
 
+	conversationID := extractConversationID(raw)
 	previousResponseID := strings.TrimSpace(responsesReq.PreviousResponseID)
+	autoPreviousResponseID := false
+	if previousResponseID == "" && conversationID != "" {
+		if mappedID, ok := s.responsesState.GetConversationLatest(conversationID); ok {
+			previousResponseID = mappedID
+			autoPreviousResponseID = true
+		}
+	}
 	if route == universalRouteResponses || previousResponseID != "" {
 		var err error
 		inputItems, err = s.restoreFunctionCallContext(inputItems, previousResponseID)
 		if err != nil {
-			return nil, &requestNormalizeError{StatusCode: http.StatusBadRequest, Message: err.Error()}
+			if autoPreviousResponseID {
+				// Best-effort continuity for clients that omit previous_response_id.
+				previousResponseID = ""
+				autoPreviousResponseID = false
+			} else {
+				return nil, &requestNormalizeError{StatusCode: http.StatusBadRequest, Message: err.Error()}
+			}
 		}
 	}
 
@@ -244,6 +271,8 @@ func (s *Server) normalizeUniversalRequest(body []byte, route universalRoute) (*
 		StoreForUpstream:        storeForUpstream,
 		StoreForced:             storeForced,
 		PreviousResponseID:      previousResponseID,
+		ConversationID:          conversationID,
+		AutoPreviousResponseID:  autoPreviousResponseID,
 		ReasoningParam:          reasoningParam,
 		MessagesCount:           messagesCount,
 		InputSource:             inputSource,
@@ -634,4 +663,106 @@ func boolToInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func extractConversationID(raw map[string]any) string {
+	if raw == nil {
+		return ""
+	}
+	if md, ok := raw["metadata"].(map[string]any); ok {
+		for _, key := range []string{"cursorConversationId", "conversation_id", "conversationId"} {
+			if id := strings.TrimSpace(stringFromAny(md[key])); id != "" {
+				return id
+			}
+		}
+	}
+	for _, key := range []string{"cursorConversationId", "conversation_id", "conversationId"} {
+		if id := strings.TrimSpace(stringFromAny(raw[key])); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+type teeReadCloser struct {
+	reader io.Reader
+	closer io.Closer
+}
+
+func newTeeReadCloser(src io.ReadCloser, dst io.Writer) io.ReadCloser {
+	return &teeReadCloser{
+		reader: io.TeeReader(src, dst),
+		closer: src,
+	}
+}
+
+func (t *teeReadCloser) Read(p []byte) (int, error) {
+	return t.reader.Read(p)
+}
+
+func (t *teeReadCloser) Close() error {
+	if t.closer == nil {
+		return nil
+	}
+	return t.closer.Close()
+}
+
+func (s *Server) storeChatStreamState(raw []byte, requestInput []types.ResponsesInputItem, instructions string, conversationID string) {
+	if s == nil || len(raw) == 0 {
+		return
+	}
+
+	reader := sse.NewReader(io.NopCloser(bytes.NewReader(raw)))
+	var responseID string
+	var outputItems []types.ResponsesOutputItem
+
+	for {
+		evt, err := reader.Next()
+		if err != nil {
+			break
+		}
+
+		if id := responseIDFromEvent(evt.Data); id != "" {
+			responseID = id
+		}
+		if evt.Type != "response.output_item.done" {
+			continue
+		}
+		item, _ := evt.Data["item"].(map[string]any)
+		if item != nil {
+			outputItems = append(outputItems, unmarshalOutputItem(item))
+		}
+	}
+
+	if responseID == "" {
+		return
+	}
+
+	var calls []types.ResponsesInputItem
+	for _, it := range outputItemsToInputItems(outputItems) {
+		if it.Type == "function_call" {
+			calls = append(calls, it)
+		}
+	}
+	s.responsesState.PutSnapshot(responseID, appendContextHistory(requestInput, outputItemsToInputItems(outputItems)), responseStateCallsFromInputItems(calls))
+	s.responsesState.PutInstructions(responseID, instructions)
+	s.responsesState.PutConversationLatest(conversationID, responseID)
+}
+
+func responseStateCallsFromInputItems(items []types.ResponsesInputItem) []responsesstate.FunctionCall {
+	if len(items) == 0 {
+		return nil
+	}
+	var calls []responsesstate.FunctionCall
+	for _, it := range items {
+		if it.Type != "function_call" || strings.TrimSpace(it.CallID) == "" || strings.TrimSpace(it.Name) == "" {
+			continue
+		}
+		calls = append(calls, responsesstate.FunctionCall{
+			CallID:    strings.TrimSpace(it.CallID),
+			Name:      strings.TrimSpace(it.Name),
+			Arguments: it.Arguments,
+		})
+	}
+	return calls
 }

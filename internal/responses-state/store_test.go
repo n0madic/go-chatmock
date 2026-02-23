@@ -180,3 +180,32 @@ func TestStoreConcurrentAccess(t *testing.T) {
 		t.Fatal("expected store to contain entries")
 	}
 }
+
+func TestStorePutGetConversationLatest(t *testing.T) {
+	s := NewStore(5*time.Minute, 10)
+	s.PutConversationLatest("conv_1", "resp_1")
+
+	got, ok := s.GetConversationLatest("conv_1")
+	if !ok {
+		t.Fatal("expected conversation mapping to exist")
+	}
+	if got != "resp_1" {
+		t.Fatalf("expected response id resp_1, got %q", got)
+	}
+
+	s.PutConversationLatest("conv_1", "resp_2")
+	got, ok = s.GetConversationLatest("conv_1")
+	if !ok || got != "resp_2" {
+		t.Fatalf("expected updated response id resp_2, got ok=%v value=%q", ok, got)
+	}
+}
+
+func TestStoreConversationLatestExpiry(t *testing.T) {
+	s := NewStore(25*time.Millisecond, 10)
+	s.PutConversationLatest("conv_1", "resp_1")
+	time.Sleep(40 * time.Millisecond)
+
+	if _, ok := s.GetConversationLatest("conv_1"); ok {
+		t.Fatal("expected conversation mapping to expire")
+	}
+}

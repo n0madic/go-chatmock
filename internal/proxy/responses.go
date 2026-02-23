@@ -17,7 +17,14 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	s.handleUnifiedCompletions(w, r, universalRouteResponses)
 }
 
-func (s *Server) collectResponsesResponse(w http.ResponseWriter, resp *upstream.Response, model string, requestInput []types.ResponsesInputItem, instructions string) {
+func (s *Server) collectResponsesResponse(
+	w http.ResponseWriter,
+	resp *upstream.Response,
+	model string,
+	requestInput []types.ResponsesInputItem,
+	instructions string,
+	conversationID string,
+) {
 	defer resp.Body.Body.Close()
 
 	reader := sse.NewReader(resp.Body.Body)
@@ -82,6 +89,7 @@ func (s *Server) collectResponsesResponse(w http.ResponseWriter, resp *upstream.
 done:
 	s.responsesState.PutSnapshot(responseID, appendContextHistory(requestInput, outputItemsToInputItems(outputItems)), toolCalls)
 	s.responsesState.PutInstructions(responseID, instructions)
+	s.responsesState.PutConversationLatest(conversationID, responseID)
 
 	if errorMsg != "" {
 		writeError(w, http.StatusBadGateway, errorMsg)
@@ -104,7 +112,13 @@ done:
 	writeJSON(w, resp.StatusCode, result)
 }
 
-func (s *Server) streamResponsesWithState(w http.ResponseWriter, resp *upstream.Response, requestInput []types.ResponsesInputItem, instructions string) {
+func (s *Server) streamResponsesWithState(
+	w http.ResponseWriter,
+	resp *upstream.Response,
+	requestInput []types.ResponsesInputItem,
+	instructions string,
+	conversationID string,
+) {
 	defer resp.Body.Body.Close()
 
 	flusher, ok := w.(http.Flusher)
@@ -156,6 +170,7 @@ func (s *Server) streamResponsesWithState(w http.ResponseWriter, resp *upstream.
 
 	s.responsesState.PutSnapshot(responseID, appendContextHistory(requestInput, outputItemsToInputItems(outputItems)), toolCalls)
 	s.responsesState.PutInstructions(responseID, instructions)
+	s.responsesState.PutConversationLatest(conversationID, responseID)
 }
 
 // unmarshalOutputItem converts a raw map to ResponsesOutputItem via JSON round-trip.

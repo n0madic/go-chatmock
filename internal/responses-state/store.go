@@ -31,8 +31,14 @@ type entry struct {
 type Store struct {
 	mu       sync.Mutex
 	entries  map[string]*entry
+	conv     map[string]conversationLink
 	ttl      time.Duration
 	capacity int
+}
+
+type conversationLink struct {
+	responseID string
+	lastAccess time.Time
 }
 
 // NewStore creates an in-memory state store with TTL and capacity limits.
@@ -45,6 +51,7 @@ func NewStore(ttl time.Duration, capacity int) *Store {
 	}
 	return &Store{
 		entries:  make(map[string]*entry),
+		conv:     make(map[string]conversationLink),
 		ttl:      ttl,
 		capacity: capacity,
 	}
@@ -246,6 +253,44 @@ func (s *Store) Exists(responseID string) bool {
 	return false
 }
 
+// PutConversationLatest stores latest response id by conversation id.
+func (s *Store) PutConversationLatest(conversationID, responseID string) {
+	if conversationID == "" || responseID == "" {
+		return
+	}
+
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cleanupExpiredLocked(now)
+	s.conv[conversationID] = conversationLink{
+		responseID: responseID,
+		lastAccess: now,
+	}
+	s.evictIfNeededLocked()
+}
+
+// GetConversationLatest returns latest response id for a conversation id.
+func (s *Store) GetConversationLatest(conversationID string) (string, bool) {
+	if conversationID == "" {
+		return "", false
+	}
+
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cleanupExpiredLocked(now)
+	link, ok := s.conv[conversationID]
+	if !ok || link.responseID == "" {
+		return "", false
+	}
+	link.lastAccess = now
+	s.conv[conversationID] = link
+	return link.responseID, true
+}
+
 // Len returns current entry count (for tests).
 func (s *Store) Len() int {
 	s.mu.Lock()
@@ -259,24 +304,43 @@ func (s *Store) cleanupExpiredLocked(now time.Time) {
 			delete(s.entries, responseID)
 		}
 	}
+	for conversationID, c := range s.conv {
+		if now.Sub(c.lastAccess) > s.ttl {
+			delete(s.conv, conversationID)
+		}
+	}
 }
 
 func (s *Store) evictIfNeededLocked() {
-	for len(s.entries) > s.capacity {
+	for len(s.entries)+len(s.conv) > s.capacity {
 		var oldestID string
 		var oldestAt time.Time
+		oldestIsConv := false
 		first := true
 		for responseID, e := range s.entries {
 			if first || e.lastAccess.Before(oldestAt) {
 				oldestID = responseID
 				oldestAt = e.lastAccess
+				oldestIsConv = false
+				first = false
+			}
+		}
+		for conversationID, c := range s.conv {
+			if first || c.lastAccess.Before(oldestAt) {
+				oldestID = conversationID
+				oldestAt = c.lastAccess
+				oldestIsConv = true
 				first = false
 			}
 		}
 		if oldestID == "" {
 			return
 		}
-		delete(s.entries, oldestID)
+		if oldestIsConv {
+			delete(s.conv, oldestID)
+		} else {
+			delete(s.entries, oldestID)
+		}
 	}
 }
 
