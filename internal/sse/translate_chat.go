@@ -115,24 +115,23 @@ func (st *chatTranslatorState) handleOutputItemDone(data map[string]any) {
 	if rawArgs == nil {
 		rawArgs = item["parameters"]
 	}
+	var argsSource any
 	if argsMap, ok := rawArgs.(map[string]any); ok {
 		if _, ok := st.wsState[callID]; !ok {
 			st.wsState[callID] = map[string]any{}
 		}
 		maps.Copy(st.wsState[callID], argsMap)
+		argsSource = st.wsState[callID]
+	} else if rawArgs != nil {
+		// Preserve string/array arguments as-is; Cursor tools expect required args to survive.
+		argsSource = rawArgs
+	} else if stateArgs := st.wsState[callID]; stateArgs != nil {
+		argsSource = stateArgs
+	} else {
+		argsSource = map[string]any{}
 	}
 
-	effArgs := st.wsState[callID]
-	if effArgs == nil {
-		switch a := rawArgs.(type) {
-		case map[string]any:
-			effArgs = a
-		default:
-			effArgs = map[string]any{}
-		}
-	}
-
-	argsStr := serializeToolArgs(effArgs)
+	argsStr := serializeToolArgs(argsSource)
 	if _, ok := st.wsIndex[callID]; !ok {
 		st.wsIndex[callID] = st.wsNextIndex
 		st.wsNextIndex++
