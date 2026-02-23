@@ -10,10 +10,10 @@ import (
 	"github.com/n0madic/go-chatmock/internal/types"
 )
 
-func (s *Server) restoreFunctionCallContext(inputItems []types.ResponsesInputItem, previousResponseID string) ([]types.ResponsesInputItem, error) {
+func (s *Server) restoreFunctionCallContext(inputItems []types.ResponsesInputItem, previousResponseID string, prependPreviousContext bool) ([]types.ResponsesInputItem, error) {
 	effectiveInput := cloneResponsesInputItems(inputItems)
 
-	if previousResponseID != "" {
+	if previousResponseID != "" && prependPreviousContext {
 		previousContext, hasContext := s.responsesState.GetContext(previousResponseID)
 		if hasContext && len(previousContext) > 0 {
 			if !hasResponsesInputPrefix(effectiveInput, previousContext) {

@@ -39,6 +39,9 @@ type chatTranslatorState struct {
 	wsState     map[string]map[string]any
 	wsIndex     map[string]int
 	wsNextIndex int
+	toolArgs    map[string]any
+	toolArgBuf  map[string]string
+	toolItemMap map[string]string
 
 	// Output helpers (set once, closed over in TranslateChat)
 	writeChunk func(any)
@@ -70,7 +73,7 @@ func (st *chatTranslatorState) handleWebSearchEvent(kind string, data map[string
 	if item, ok := data["item"].(map[string]any); ok {
 		mergeWebSearchParams(st.wsState[callID], item)
 	}
-	argsStr := serializeToolArgs(st.wsState[callID])
+	argsStr := serializeToolArgs(st.wsState[callID], true)
 	if _, ok := st.wsIndex[callID]; !ok {
 		st.wsIndex[callID] = st.wsNextIndex
 		st.wsNextIndex++
@@ -97,6 +100,100 @@ func (st *chatTranslatorState) handleWebSearchEvent(kind string, data map[string
 	}
 }
 
+func (st *chatTranslatorState) handleOutputItemAdded(data map[string]any) {
+	item, _ := data["item"].(map[string]any)
+	itemType, _ := item["type"].(string)
+	if itemType != "function_call" && itemType != "web_search_call" {
+		return
+	}
+
+	itemID := strings.TrimSpace(stringOr(item, "id"))
+	callID := strings.TrimSpace(stringOr(item, "call_id", itemID))
+	if itemID != "" && callID != "" {
+		st.toolItemMap[itemID] = callID
+	}
+
+	rawArgs := extractRawToolArgs(item)
+	if isEmptyToolArgs(rawArgs) {
+		return
+	}
+	if itemID != "" {
+		st.toolArgs[itemID] = rawArgs
+	}
+	if callID != "" {
+		st.toolArgs[callID] = rawArgs
+	}
+}
+
+func (st *chatTranslatorState) handleFunctionCallArgumentsDelta(data map[string]any) {
+	itemID := strings.TrimSpace(stringOr(data, "item_id", stringOr(data, "call_id", stringOr(data, "id", ""))))
+	delta, _ := data["delta"].(string)
+	if itemID == "" || delta == "" {
+		return
+	}
+	st.toolArgBuf[itemID] += delta
+	if callID := strings.TrimSpace(st.toolItemMap[itemID]); callID != "" {
+		st.toolArgBuf[callID] += delta
+	}
+}
+
+func (st *chatTranslatorState) handleFunctionCallArgumentsDone(data map[string]any) {
+	itemID := strings.TrimSpace(stringOr(data, "item_id", stringOr(data, "call_id", stringOr(data, "id", ""))))
+	callID := strings.TrimSpace(st.toolItemMap[itemID])
+	rawArgs := extractRawToolArgs(data)
+	if isEmptyToolArgs(rawArgs) {
+		if item, ok := data["item"].(map[string]any); ok {
+			rawArgs = extractRawToolArgs(item)
+		}
+	}
+	if isEmptyToolArgs(rawArgs) {
+		return
+	}
+
+	if itemID != "" {
+		st.toolArgs[itemID] = rawArgs
+	}
+	if callID != "" {
+		st.toolArgs[callID] = rawArgs
+	}
+}
+
+func (st *chatTranslatorState) bufferedToolArgs(item map[string]any) (any, bool) {
+	itemID := strings.TrimSpace(stringOr(item, "id"))
+	callID := strings.TrimSpace(stringOr(item, "call_id", itemID))
+	keys := []string{itemID}
+	if callID != "" && callID != itemID {
+		keys = append(keys, callID)
+	}
+	if mapped := strings.TrimSpace(st.toolItemMap[itemID]); mapped != "" && mapped != callID {
+		keys = append(keys, mapped)
+	}
+
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if raw, ok := st.toolArgs[key]; ok && !isEmptyToolArgs(raw) {
+			return raw, true
+		}
+	}
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		buf := strings.TrimSpace(st.toolArgBuf[key])
+		if buf == "" {
+			continue
+		}
+		var parsed any
+		if json.Unmarshal([]byte(buf), &parsed) == nil {
+			return parsed, true
+		}
+		return buf, true
+	}
+	return nil, false
+}
+
 // handleOutputItemDone processes "response.output_item.done" events for function/web-search calls.
 func (st *chatTranslatorState) handleOutputItemDone(data map[string]any) {
 	item, _ := data["item"].(map[string]any)
@@ -115,6 +212,14 @@ func (st *chatTranslatorState) handleOutputItemDone(data map[string]any) {
 	if rawArgs == nil {
 		rawArgs = item["parameters"]
 	}
+	if rawArgs == nil {
+		rawArgs = item["input"]
+	}
+	if isEmptyToolArgs(rawArgs) {
+		if bufferedArgs, ok := st.bufferedToolArgs(item); ok {
+			rawArgs = bufferedArgs
+		}
+	}
 	var argsSource any
 	if argsMap, ok := rawArgs.(map[string]any); ok {
 		if _, ok := st.wsState[callID]; !ok {
@@ -131,7 +236,7 @@ func (st *chatTranslatorState) handleOutputItemDone(data map[string]any) {
 		argsSource = map[string]any{}
 	}
 
-	argsStr := serializeToolArgs(argsSource)
+	argsStr := serializeToolArgs(argsSource, itemType == "web_search_call")
 	if _, ok := st.wsIndex[callID]; !ok {
 		st.wsIndex[callID] = st.wsNextIndex
 		st.wsNextIndex++
@@ -245,6 +350,9 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 		wsState:     map[string]map[string]any{},
 		wsIndex:     map[string]int{},
 		wsNextIndex: 0,
+		toolArgs:    map[string]any{},
+		toolArgBuf:  map[string]string{},
+		toolItemMap: map[string]string{},
 	}
 
 	st.writeChunk = func(chunk any) {
@@ -285,6 +393,15 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 		}
 
 		switch kind {
+		case "response.output_item.added":
+			st.handleOutputItemAdded(evt.Data)
+
+		case "response.function_call_arguments.delta":
+			st.handleFunctionCallArgumentsDelta(evt.Data)
+
+		case "response.function_call_arguments.done":
+			st.handleFunctionCallArgumentsDone(evt.Data)
+
 		case "response.output_text.delta":
 			delta, _ := evt.Data["delta"].(string)
 			if st.compat == "think-tags" && st.thinkOpen && !st.thinkClosed {
@@ -375,7 +492,7 @@ func stringOr(m map[string]any, keys ...string) string {
 	return ""
 }
 
-func serializeToolArgs(args any) string {
+func serializeToolArgs(args any, queryFallback bool) string {
 	switch a := args.(type) {
 	case map[string]any:
 		b, _ := json.Marshal(a)
@@ -384,15 +501,50 @@ func serializeToolArgs(args any) string {
 		b, _ := json.Marshal(a)
 		return string(b)
 	case string:
+		raw := strings.TrimSpace(a)
+		if raw == "" {
+			return "{}"
+		}
 		var parsed any
-		if json.Unmarshal([]byte(a), &parsed) == nil {
+		if json.Unmarshal([]byte(raw), &parsed) == nil {
 			b, _ := json.Marshal(parsed)
 			return string(b)
 		}
-		b, _ := json.Marshal(map[string]any{"query": a})
-		return string(b)
+		if queryFallback {
+			b, _ := json.Marshal(map[string]any{"query": raw})
+			return string(b)
+		}
+		return raw
 	}
 	return "{}"
+}
+
+func extractRawToolArgs(item map[string]any) any {
+	if item == nil {
+		return nil
+	}
+	for _, key := range []string{"arguments", "parameters", "input"} {
+		if val, ok := item[key]; ok {
+			return val
+		}
+	}
+	return nil
+}
+
+func isEmptyToolArgs(args any) bool {
+	switch v := args.(type) {
+	case nil:
+		return true
+	case string:
+		trimmed := strings.TrimSpace(v)
+		return trimmed == "" || trimmed == "{}" || trimmed == "null"
+	case map[string]any:
+		return len(v) == 0
+	case []any:
+		return len(v) == 0
+	default:
+		return false
+	}
 }
 
 func mergeWebSearchParams(dst map[string]any, src map[string]any) {

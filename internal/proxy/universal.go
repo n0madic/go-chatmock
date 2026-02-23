@@ -207,8 +207,9 @@ func (s *Server) normalizeUniversalRequest(body []byte, route universalRoute) (*
 		}
 	}
 	if route == universalRouteResponses || previousResponseID != "" {
+		prependPreviousContext := route == universalRouteResponses
 		var err error
-		inputItems, err = s.restoreFunctionCallContext(inputItems, previousResponseID)
+		inputItems, err = s.restoreFunctionCallContext(inputItems, previousResponseID, prependPreviousContext)
 		if err != nil {
 			if autoPreviousResponseID {
 				// Best-effort continuity for clients that omit previous_response_id.

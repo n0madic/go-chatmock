@@ -42,7 +42,7 @@ func TestRestoreFunctionCallContextSuccess(t *testing.T) {
 		{Type: "function_call_output", CallID: "call_1", Output: "content"},
 	}
 
-	got, err := s.restoreFunctionCallContext(input, "resp_1")
+	got, err := s.restoreFunctionCallContext(input, "resp_1", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestRestoreFunctionCallContextMissingPreviousID(t *testing.T) {
 		{Type: "function_call_output", CallID: "call_1", Output: "content"},
 	}
 
-	_, err := s.restoreFunctionCallContext(input, "")
+	_, err := s.restoreFunctionCallContext(input, "", true)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -81,7 +81,7 @@ func TestRestoreFunctionCallContextUnknownPreviousID(t *testing.T) {
 		{Type: "function_call_output", CallID: "call_1", Output: "content"},
 	}
 
-	_, err := s.restoreFunctionCallContext(input, "resp_missing")
+	_, err := s.restoreFunctionCallContext(input, "resp_missing", true)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -96,7 +96,7 @@ func TestRestoreFunctionCallContextUnknownPreviousIDWithoutToolOutput(t *testing
 		{Type: "message", Role: "user", Content: []types.ResponsesContent{{Type: "input_text", Text: "hello"}}},
 	}
 
-	_, err := s.restoreFunctionCallContext(input, "resp_missing")
+	_, err := s.restoreFunctionCallContext(input, "resp_missing", true)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -112,7 +112,7 @@ func TestRestoreFunctionCallContextAcceptsPreviousIDWithInstructionsOnlyState(t 
 		{Type: "message", Role: "user", Content: []types.ResponsesContent{{Type: "input_text", Text: "hello"}}},
 	}
 
-	got, err := s.restoreFunctionCallContext(input, "resp_1")
+	got, err := s.restoreFunctionCallContext(input, "resp_1", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -132,12 +132,59 @@ func TestRestoreFunctionCallContextMissingCallInState(t *testing.T) {
 		{Type: "function_call_output", CallID: "call_1", Output: "content"},
 	}
 
-	_, err := s.restoreFunctionCallContext(input, "resp_1")
+	_, err := s.restoreFunctionCallContext(input, "resp_1", true)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if !strings.Contains(err.Error(), "does not contain required call_id") {
 		t.Fatalf("unexpected error: %q", err.Error())
+	}
+}
+
+func TestRestoreFunctionCallContextNoPrependSkipsContextMerge(t *testing.T) {
+	s := &Server{
+		responsesState: responsesstate.NewStore(5*time.Minute, 100),
+	}
+	s.responsesState.PutContext("resp_1", []types.ResponsesInputItem{
+		{
+			Type:    "message",
+			Role:    "user",
+			Content: []types.ResponsesContent{{Type: "input_text", Text: "old history"}},
+		},
+	})
+
+	input := []types.ResponsesInputItem{
+		{
+			Type:    "message",
+			Role:    "user",
+			Content: []types.ResponsesContent{{Type: "input_text", Text: "current message"}},
+		},
+	}
+
+	got, err := s.restoreFunctionCallContext(input, "resp_1", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected input without prepended history, got %d items", len(got))
+	}
+	if got[0].Role != "user" || got[0].Content[0].Text != "current message" {
+		t.Fatalf("unexpected restored item: %+v", got[0])
+	}
+}
+
+func TestRestoreFunctionCallContextNoPrependAllowsUnknownPreviousIDWithoutToolOutput(t *testing.T) {
+	s := &Server{responsesState: responsesstate.NewStore(5*time.Minute, 100)}
+	input := []types.ResponsesInputItem{
+		{Type: "message", Role: "user", Content: []types.ResponsesContent{{Type: "input_text", Text: "hello"}}},
+	}
+
+	got, err := s.restoreFunctionCallContext(input, "resp_missing", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].Role != "user" {
+		t.Fatalf("unexpected restored input: %+v", got)
 	}
 }
 
