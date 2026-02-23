@@ -15,15 +15,19 @@ import (
 	"github.com/n0madic/go-chatmock/internal/auth"
 	"github.com/n0madic/go-chatmock/internal/config"
 	"github.com/n0madic/go-chatmock/internal/models"
-	"github.com/n0madic/go-chatmock/internal/responses-state"
+	responsesstate "github.com/n0madic/go-chatmock/internal/responses-state"
 	"github.com/n0madic/go-chatmock/internal/upstream"
 )
+
+type upstreamDoer interface {
+	Do(context.Context, *upstream.Request) (*upstream.Response, error)
+}
 
 // Server is the main proxy HTTP server.
 type Server struct {
 	Config         *config.ServerConfig
 	httpServer     *http.Server
-	upstreamClient *upstream.Client
+	upstreamClient upstreamDoer
 	Registry       *models.Registry
 	responsesState *responsesstate.Store
 	debugDumpMu    sync.Mutex
