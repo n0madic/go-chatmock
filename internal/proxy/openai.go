@@ -131,6 +131,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Tools:             toolsResponses,
 		ToolChoice:        toolChoice,
 		ParallelToolCalls: parallelToolCalls,
+		Store:             types.BoolPtr(false),
 		ReasoningParam:    reasoningParam,
 		SessionID:         r.Header.Get("X-Session-Id"),
 	}
@@ -259,6 +260,7 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 		Model:          model,
 		Instructions:   s.Config.InstructionsForModel(model),
 		InputItems:     inputItems,
+		Store:          types.BoolPtr(false),
 		ReasoningParam: reasoningParam,
 	}
 
