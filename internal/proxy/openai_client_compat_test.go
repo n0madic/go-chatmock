@@ -202,6 +202,136 @@ data: {"type":"response.completed","response":{"id":"resp_chat_input"}}
 	}
 }
 
+func TestOpenAIClientCompatChatCompletionsAcceptsResponsesStyleTools(t *testing.T) {
+	up := &queuedUpstreamClient{
+		results: []queuedUpstreamResult{
+			{
+				body: `data: {"type":"response.created","response":{"id":"resp_chat_tools"}}
+
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"ReadFile","arguments":"{\"path\":\"README.md\"}"}}
+
+data: {"type":"response.completed","response":{"id":"resp_chat_tools"}}
+`,
+			},
+		},
+	}
+	s := newCompatTestServer(up)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gpt-5",
+		"stream":false,
+		"input":[
+			{"role":"system","content":"system rules"},
+			{"role":"user","content":"Read README"}
+		],
+		"tools":[
+			{"type":"function","name":"ReadFile","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}
+		]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want %d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var out types.ChatCompletionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	if len(out.Choices) != 1 {
+		t.Fatalf("expected one choice, got %+v", out.Choices)
+	}
+	if len(out.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call in chat response, got %+v", out.Choices[0].Message.ToolCalls)
+	}
+	tc := out.Choices[0].Message.ToolCalls[0]
+	if tc.Function.Name != "ReadFile" || !strings.Contains(tc.Function.Arguments, `"path":"README.md"`) {
+		t.Fatalf("unexpected tool call in chat response: %+v", tc)
+	}
+
+	if len(up.calls) != 1 {
+		t.Fatalf("upstream call count: got %d want %d", len(up.calls), 1)
+	}
+	call := up.calls[0]
+	if got := call.Instructions; got != "system rules" {
+		t.Fatalf("upstream instructions: got %q want %q", got, "system rules")
+	}
+	if len(call.InputItems) != 1 || call.InputItems[0].Role != "user" {
+		t.Fatalf("unexpected upstream input items: %+v", call.InputItems)
+	}
+	if got := call.InputItems[0].Content[0].Text; got != "Read README" {
+		t.Fatalf("upstream input text: got %q want %q", got, "Read README")
+	}
+	if len(call.Tools) != 1 {
+		t.Fatalf("unexpected upstream tools count: got %d want %d", len(call.Tools), 1)
+	}
+	if tool := call.Tools[0]; tool.Type != "function" || tool.Name != "ReadFile" || tool.Parameters == nil || tool.Strict == nil || *tool.Strict {
+		t.Fatalf("unexpected normalized upstream tool: %+v", tool)
+	}
+}
+
+func TestOpenAIClientCompatChatCompletionsAcceptsAccumulatedToolLoopInput(t *testing.T) {
+	up := &queuedUpstreamClient{
+		results: []queuedUpstreamResult{
+			{
+				body: `data: {"type":"response.created","response":{"id":"resp_chat_loop"}}
+
+data: {"type":"response.output_text.delta","delta":"Loop continued"}
+
+data: {"type":"response.completed","response":{"id":"resp_chat_loop"}}
+`,
+			},
+		},
+	}
+	s := newCompatTestServer(up)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gpt-5",
+		"stream":false,
+		"input":[
+			{"role":"user","content":"Summarize project"},
+			{"role":"assistant","content":"I will inspect files"},
+			{"type":"function_call","call_id":"call_1","name":"ReadFile","arguments":"{\"path\":\"README.md\"}"},
+			{"type":"function_call_output","call_id":"call_1","output":"# README"},
+			{"role":"user","content":"continue"}
+		]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want %d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	if len(up.calls) != 1 {
+		t.Fatalf("upstream call count: got %d want %d", len(up.calls), 1)
+	}
+	items := up.calls[0].InputItems
+	if len(items) != 5 {
+		t.Fatalf("upstream input length: got %d want %d items=%+v", len(items), 5, items)
+	}
+	if items[0].Type != "message" || items[0].Role != "user" {
+		t.Fatalf("unexpected first input item: %+v", items[0])
+	}
+	if items[1].Type != "message" || items[1].Role != "assistant" {
+		t.Fatalf("unexpected second input item: %+v", items[1])
+	}
+	if items[2].Type != "function_call" || items[2].CallID != "call_1" || items[2].Name != "ReadFile" {
+		t.Fatalf("unexpected function_call item: %+v", items[2])
+	}
+	if items[3].Type != "function_call_output" || items[3].CallID != "call_1" || items[3].Output != "# README" {
+		t.Fatalf("unexpected function_call_output item: %+v", items[3])
+	}
+	if items[4].Type != "message" || items[4].Role != "user" || items[4].Content[0].Text != "continue" {
+		t.Fatalf("unexpected final user item: %+v", items[4])
+	}
+}
+
 func TestOpenAIClientCompatResponsesNonStream(t *testing.T) {
 	up := &queuedUpstreamClient{
 		results: []queuedUpstreamResult{
@@ -405,5 +535,186 @@ data: {"type":"response.completed","response":{"id":"resp_loop_2"}}
 	}
 	if secondInput[len(secondInput)-1].Type != "function_call_output" || secondInput[len(secondInput)-1].CallID != "call_1" {
 		t.Fatalf("expected function_call_output in second request tail, got %+v", secondInput[len(secondInput)-1])
+	}
+}
+
+func TestOpenAIClientCompatChatToolLoopAutoByCursorConversationIDMetadata(t *testing.T) {
+	up := &queuedUpstreamClient{
+		results: []queuedUpstreamResult{
+			{
+				body: `data: {"type":"response.created","response":{"id":"resp_cursor_1"}}
+
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}
+
+data: {"type":"response.completed","response":{"id":"resp_cursor_1"}}
+`,
+			},
+			{
+				body: `data: {"type":"response.created","response":{"id":"resp_cursor_2"}}
+
+data: {"type":"response.output_text.delta","delta":"21C"}
+
+data: {"type":"response.completed","response":{"id":"resp_cursor_2"}}
+`,
+			},
+		},
+	}
+	s := newCompatTestServer(up)
+	const convID = "cursor-conv-meta-1"
+
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gpt-5",
+		"stream":true,
+		"input":[{"role":"user","content":"Weather in Paris?"}],
+		"metadata":{"cursorConversationId":"`+convID+`"}
+	}`))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	s.handleChatCompletions(w1, req1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first status: got %d want %d body=%s", w1.Code, http.StatusOK, w1.Body.String())
+	}
+	if body := w1.Body.String(); !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("expected [DONE] in first stream body, got %s", body)
+	}
+	if latest, ok := s.responsesState.GetConversationLatest(convID); !ok || latest != "resp_cursor_1" {
+		t.Fatalf("unexpected latest response after first request: ok=%v id=%q", ok, latest)
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gpt-5",
+		"stream":false,
+		"input":[
+			{"type":"function_call_output","call_id":"call_1","output":"{\"temp_c\":21}"},
+			{"role":"user","content":"continue"}
+		],
+		"metadata":{"cursorConversationId":"`+convID+`"}
+	}`))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	s.handleChatCompletions(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second status: got %d want %d body=%s", w2.Code, http.StatusOK, w2.Body.String())
+	}
+
+	if len(up.calls) != 2 {
+		t.Fatalf("upstream call count: got %d want %d", len(up.calls), 2)
+	}
+	secondInput := up.calls[1].InputItems
+	if len(secondInput) != 3 {
+		t.Fatalf("expected restored tool loop in second input, got %+v", secondInput)
+	}
+	if secondInput[0].Type != "function_call" || secondInput[0].CallID != "call_1" || secondInput[0].Name != "get_weather" {
+		t.Fatalf("expected injected function_call first, got %+v", secondInput[0])
+	}
+	if secondInput[1].Type != "function_call_output" || secondInput[1].CallID != "call_1" {
+		t.Fatalf("expected function_call_output second, got %+v", secondInput[1])
+	}
+	if secondInput[2].Type != "message" || secondInput[2].Role != "user" || secondInput[2].Content[0].Text != "continue" {
+		t.Fatalf("expected user continuation third, got %+v", secondInput[2])
+	}
+	if latest, ok := s.responsesState.GetConversationLatest(convID); !ok || latest != "resp_cursor_2" {
+		t.Fatalf("unexpected latest response after second request: ok=%v id=%q", ok, latest)
+	}
+}
+
+func TestOpenAIClientCompatChatToolLoopAutoByCursorConversationIDUsesLatest(t *testing.T) {
+	up := &queuedUpstreamClient{
+		results: []queuedUpstreamResult{
+			{
+				body: `data: {"type":"response.created","response":{"id":"resp_cursor_latest_1"}}
+
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"ReadFile","arguments":"{\"path\":\"README.md\"}"}}
+
+data: {"type":"response.completed","response":{"id":"resp_cursor_latest_1"}}
+`,
+			},
+			{
+				body: `data: {"type":"response.created","response":{"id":"resp_cursor_latest_2"}}
+
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_2","name":"Shell","arguments":"{\"command\":\"pwd\"}"}}
+
+data: {"type":"response.completed","response":{"id":"resp_cursor_latest_2"}}
+`,
+			},
+			{
+				body: `data: {"type":"response.created","response":{"id":"resp_cursor_latest_3"}}
+
+data: {"type":"response.output_text.delta","delta":"done"}
+
+data: {"type":"response.completed","response":{"id":"resp_cursor_latest_3"}}
+`,
+			},
+		},
+	}
+	s := newCompatTestServer(up)
+	const convID = "cursor-conv-top-level-1"
+
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gpt-5",
+		"stream":false,
+		"input":[{"role":"user","content":"step 1"}],
+		"cursorConversationId":"`+convID+`"
+	}`))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	s.handleChatCompletions(w1, req1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first status: got %d want %d body=%s", w1.Code, http.StatusOK, w1.Body.String())
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gpt-5",
+		"stream":false,
+		"input":[{"type":"function_call_output","call_id":"call_1","output":"# README"}],
+		"cursorConversationId":"`+convID+`"
+	}`))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	s.handleChatCompletions(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second status: got %d want %d body=%s", w2.Code, http.StatusOK, w2.Body.String())
+	}
+
+	req3 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gpt-5",
+		"stream":false,
+		"input":[{"type":"function_call_output","call_id":"call_2","output":"/workspace"}],
+		"cursorConversationId":"`+convID+`"
+	}`))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	s.handleChatCompletions(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("third status: got %d want %d body=%s", w3.Code, http.StatusOK, w3.Body.String())
+	}
+
+	if len(up.calls) != 3 {
+		t.Fatalf("upstream call count: got %d want %d", len(up.calls), 3)
+	}
+
+	secondInput := up.calls[1].InputItems
+	if len(secondInput) != 2 {
+		t.Fatalf("expected injected call + output in second input, got %+v", secondInput)
+	}
+	if secondInput[0].Type != "function_call" || secondInput[0].CallID != "call_1" || secondInput[0].Name != "ReadFile" {
+		t.Fatalf("expected call_1 restoration in second input, got %+v", secondInput[0])
+	}
+	if secondInput[1].Type != "function_call_output" || secondInput[1].CallID != "call_1" {
+		t.Fatalf("expected call_1 output in second input, got %+v", secondInput[1])
+	}
+
+	thirdInput := up.calls[2].InputItems
+	if len(thirdInput) != 2 {
+		t.Fatalf("expected injected call + output in third input, got %+v", thirdInput)
+	}
+	if thirdInput[0].Type != "function_call" || thirdInput[0].CallID != "call_2" || thirdInput[0].Name != "Shell" {
+		t.Fatalf("expected call_2 restoration from latest response, got %+v", thirdInput[0])
+	}
+	if thirdInput[1].Type != "function_call_output" || thirdInput[1].CallID != "call_2" {
+		t.Fatalf("expected call_2 output in third input, got %+v", thirdInput[1])
+	}
+	if latest, ok := s.responsesState.GetConversationLatest(convID); !ok || latest != "resp_cursor_latest_3" {
+		t.Fatalf("unexpected latest response after third request: ok=%v id=%q", ok, latest)
 	}
 }
