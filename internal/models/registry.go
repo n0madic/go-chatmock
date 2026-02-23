@@ -16,9 +16,6 @@ import (
 	"github.com/n0madic/go-chatmock/internal/config"
 )
 
-// clientVersion is sent in the models API request, matching the Codex CLI version.
-const clientVersion = "0.104.0"
-
 // cacheTTL is how long to cache the remote model list before background refresh.
 const cacheTTL = 5 * time.Minute
 
@@ -194,12 +191,13 @@ func (r *Registry) doFetch() error {
 		return fmt.Errorf("no credentials available")
 	}
 
-	url := fmt.Sprintf("%s?client_version=%s", config.ModelsURL, clientVersion)
+	url := fmt.Sprintf("%s?client_version=%s", config.ModelsURL, config.CodexClientVersion)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", config.CodexUserAgent())
 	if accountID != "" {
 		req.Header.Set("chatgpt-account-id", accountID)
 	}

@@ -125,6 +125,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	}
 
 	httpReq.Header.Set("Authorization", "Bearer "+accessToken)
+	httpReq.Header.Set("User-Agent", config.CodexUserAgent())
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("chatgpt-account-id", accountID)
