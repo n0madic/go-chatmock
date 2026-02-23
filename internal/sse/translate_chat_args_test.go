@@ -97,3 +97,37 @@ data: {"type":"response.completed","response":{"id":"resp_tool_raw"}}
 		t.Fatalf("unexpected query-wrapper for function args: %s", out)
 	}
 }
+
+func TestTranslateChatSkipsCommentaryAndEndsWithToolCalls(t *testing.T) {
+	stream := `data: {"type":"response.created","response":{"id":"resp_commentary"}}
+
+data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_commentary","role":"assistant","phase":"commentary"}}
+
+data: {"type":"response.output_text.delta","item_id":"msg_commentary","delta":"<think>internal plan</think> assistant to=functions.Shell {\"command\":\"ls\"}"}
+
+data: {"type":"response.output_text.done","item_id":"msg_commentary"}
+
+data: {"type":"response.output_item.done","item":{"type":"message","id":"msg_commentary","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"internal"}]}}
+
+data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_shell","name":"Shell","arguments":"{\"command\":\"ls\"}"}}
+
+data: {"type":"response.completed","response":{"id":"resp_commentary"}}
+`
+
+	w := newFlusherRecorder()
+	TranslateChat(w, io.NopCloser(strings.NewReader(stream)), "gpt-5.3-codex", time.Now().Unix(), TranslateChatOptions{})
+
+	out := w.Body.String()
+	if strings.Contains(out, "functions.Shell") || strings.Contains(out, "internal plan") {
+		t.Fatalf("unexpected commentary leaked into chat output: %s", out)
+	}
+	if !strings.Contains(out, `"finish_reason":"tool_calls"`) {
+		t.Fatalf("expected tool_calls finish_reason, got: %s", out)
+	}
+	if strings.Contains(out, `"finish_reason":"stop"`) {
+		t.Fatalf("unexpected stop finish_reason for tool-call turn: %s", out)
+	}
+	if !strings.Contains(out, "data: [DONE]") {
+		t.Fatalf("expected [DONE] marker, got: %s", out)
+	}
+}

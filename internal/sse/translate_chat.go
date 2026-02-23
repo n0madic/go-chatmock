@@ -42,6 +42,7 @@ type chatTranslatorState struct {
 	toolArgs    map[string]any
 	toolArgBuf  map[string]string
 	toolItemMap map[string]string
+	hiddenText  map[string]bool
 
 	// Output helpers (set once, closed over in TranslateChat)
 	writeChunk func(any)
@@ -103,6 +104,18 @@ func (st *chatTranslatorState) handleWebSearchEvent(kind string, data map[string
 func (st *chatTranslatorState) handleOutputItemAdded(data map[string]any) {
 	item, _ := data["item"].(map[string]any)
 	itemType, _ := item["type"].(string)
+
+	if itemType == "message" {
+		itemID := strings.TrimSpace(stringOr(item, "id"))
+		phase := strings.ToLower(strings.TrimSpace(stringOr(item, "phase")))
+		if itemID != "" {
+			// Cursor may stream internal planning/commentary as output_text deltas.
+			// Keep it out of chat.completions content to avoid UI garbage.
+			st.hiddenText[itemID] = phase == "commentary"
+		}
+		return
+	}
+
 	if itemType != "function_call" && itemType != "web_search_call" {
 		return
 	}
@@ -261,6 +274,7 @@ func (st *chatTranslatorState) handleOutputItemDone(data map[string]any) {
 			ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
 			Choices: []types.ChatChunkChoice{{Index: 0, Delta: types.ChatDelta{}, FinishReason: types.StringPtr("tool_calls")}},
 		})
+		st.sentStopChunk = true
 	}
 }
 
@@ -353,6 +367,7 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 		toolArgs:    map[string]any{},
 		toolArgBuf:  map[string]string{},
 		toolItemMap: map[string]string{},
+		hiddenText:  map[string]bool{},
 	}
 
 	st.writeChunk = func(chunk any) {
@@ -403,6 +418,10 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 			st.handleFunctionCallArgumentsDone(evt.Data)
 
 		case "response.output_text.delta":
+			itemID := strings.TrimSpace(stringOr(evt.Data, "item_id"))
+			if itemID != "" && st.hiddenText[itemID] {
+				continue
+			}
 			delta, _ := evt.Data["delta"].(string)
 			if st.compat == "think-tags" && st.thinkOpen && !st.thinkClosed {
 				st.writeChunk(st.makeDelta(types.ChatDelta{Content: "</think>"}))
@@ -423,15 +442,20 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 				}
 			}
 
-		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+		case "response.reasoning_summary_text.delta":
 			st.handleReasoningDelta(kind, evt.Data)
 
+		case "response.reasoning_text.delta":
+			// Upstream may stream encrypted/non-human full reasoning tokens when
+			// include=reasoning.encrypted_content is requested. Do not surface
+			// them in chat output; keep chat stream readable and deterministic.
+			continue
+
 		case "response.output_text.done":
-			st.writeChunk(types.ChatCompletionChunk{
-				ID: st.responseID, Object: "chat.completion.chunk", Created: st.created, Model: st.model,
-				Choices: []types.ChatChunkChoice{{Index: 0, Delta: types.ChatDelta{}, FinishReason: types.StringPtr("stop")}},
-			})
-			st.sentStopChunk = true
+			// Do not emit finish_reason on output_text.done: tool-call turns can include
+			// intermediate text segments before response.completed.
+			// Final finish_reason is emitted on response.completed.
+			continue
 
 		case "response.failed":
 			errMsg := "response.failed"

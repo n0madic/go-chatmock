@@ -54,6 +54,7 @@ type ResponsesOutputItem struct {
 	Type      string             `json:"type"`
 	ID        string             `json:"id,omitempty"`
 	Role      string             `json:"role,omitempty"`
+	Phase     string             `json:"phase,omitempty"`
 	Content   []ResponsesContent `json:"content,omitempty"`
 	Status    string             `json:"status,omitempty"`
 	Name      string             `json:"name,omitempty"`

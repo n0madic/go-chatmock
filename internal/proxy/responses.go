@@ -194,6 +194,9 @@ func outputItemsToInputItems(items []types.ResponsesOutputItem) []types.Response
 func inputItemFromOutputItem(item types.ResponsesOutputItem) (types.ResponsesInputItem, bool) {
 	switch item.Type {
 	case "message":
+		if strings.EqualFold(strings.TrimSpace(item.Phase), "commentary") {
+			return types.ResponsesInputItem{}, false
+		}
 		if len(item.Content) == 0 {
 			return types.ResponsesInputItem{}, false
 		}
