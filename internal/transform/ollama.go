@@ -154,7 +154,7 @@ func ConvertOllamaMessages(messages []any, topImages []string) []types.ChatMessa
 
 	// Attach top-level images to last user message
 	if len(topImages) > 0 {
-		var attachIdx int = -1
+		attachIdx := -1
 		for i := len(out) - 1; i >= 0; i-- {
 			if out[i].Role == "user" {
 				attachIdx = i

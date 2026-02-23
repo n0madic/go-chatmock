@@ -107,8 +107,6 @@ func TranslateOllama(w http.ResponseWriter, body io.ReadCloser, model, createdAt
 		case "response.completed":
 			if compat == "think-tags" && thinkOpen && !thinkClosed {
 				writeMsg("</think>", false)
-				thinkOpen = false
-				thinkClosed = true
 			}
 			writeMsg("", true)
 			return

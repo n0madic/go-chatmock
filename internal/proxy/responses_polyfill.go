@@ -148,11 +148,6 @@ func isUnsupportedParameterError(rawBody []byte, param string) bool {
 	return strings.Contains(msg, "unsupported parameter") && strings.Contains(msg, strings.ToLower(strings.TrimSpace(param)))
 }
 
-func isToolCallOutputNotFoundError(rawBody []byte) bool {
-	msg := strings.ToLower(extractUpstreamErrorMessage(rawBody))
-	return strings.Contains(msg, "no tool call found for function call output with call_id")
-}
-
 // normalizeStoreForUpstream keeps store handling compatible with upstream:
 // we always send store=false upstream, because true is rejected.
 // Returns (valueToSend, forcedFromTrue).
