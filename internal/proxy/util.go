@@ -360,6 +360,10 @@ func parseResponsesStyleToolsFromRaw(rawTools any) []types.ResponsesTool {
 			if t.Strict == nil {
 				t.Strict = types.BoolPtr(false)
 			}
+		case "custom":
+			if strings.TrimSpace(t.Name) == "" {
+				continue
+			}
 		case "web_search", "web_search_preview":
 			// pass through
 		default:

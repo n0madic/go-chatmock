@@ -231,6 +231,11 @@ func (s *Server) normalizeUniversalRequest(body []byte, route universalRoute) (*
 	}
 	reasoningParam := buildReasoningWithModelFallback(s.Config, requestedModel, model, reasoningOverrides)
 
+	responseFormat := universalRouteChat
+	if inputSource == "input" {
+		responseFormat = universalRouteResponses
+	}
+
 	toolChoice := pickToolChoice(route, chatReq, responsesReq)
 	parallelToolCalls := false
 	if v, ok := raw["parallel_tool_calls"].(bool); ok {
@@ -239,7 +244,7 @@ func (s *Server) normalizeUniversalRequest(body []byte, route universalRoute) (*
 		parallelToolCalls = *responsesReq.ParallelToolCalls
 	}
 
-	tools, baseTools, hadResponsesTools, defaultWebSearchApplied, terr := s.normalizeUniversalTools(raw, route, chatReq, responsesReq, toolChoice)
+	tools, baseTools, hadResponsesTools, defaultWebSearchApplied, terr := s.normalizeUniversalTools(raw, responseFormat, chatReq, responsesReq, toolChoice)
 	if terr != nil {
 		return nil, terr
 	}
@@ -255,11 +260,6 @@ func (s *Server) normalizeUniversalRequest(body []byte, route universalRoute) (*
 		stream = chatReq.Stream || responsesReq.Stream
 	}
 	includeUsage := chatReq.StreamOptions != nil && chatReq.StreamOptions.IncludeUsage
-
-	responseFormat := universalRouteChat
-	if inputSource == "input" {
-		responseFormat = universalRouteResponses
-	}
 
 	return &universalRequest{
 		ResponseFormat:          responseFormat,
@@ -526,7 +526,7 @@ func pickToolChoice(route universalRoute, chatReq types.ChatCompletionRequest, r
 
 func (s *Server) normalizeUniversalTools(
 	raw map[string]any,
-	route universalRoute,
+	responseFormat universalRoute,
 	chatReq types.ChatCompletionRequest,
 	responsesReq types.ResponsesRequest,
 	toolChoice any,
@@ -536,7 +536,7 @@ func (s *Server) normalizeUniversalTools(
 	responsesStyleTools := parseResponsesStyleToolsFromRaw(raw["tools"])
 
 	var primary []types.ResponsesTool
-	if route == universalRouteChat {
+	if responseFormat == universalRouteChat {
 		primary = chatTools
 		if len(primary) == 0 {
 			if len(responsesTools) > 0 {
@@ -619,6 +619,10 @@ func sanitizeResponsesTools(in []types.ResponsesTool) []types.ResponsesTool {
 			}
 			if t.Strict == nil {
 				t.Strict = types.BoolPtr(false)
+			}
+		case "custom":
+			if strings.TrimSpace(t.Name) == "" {
+				continue
 			}
 		case "web_search", "web_search_preview":
 			// pass through

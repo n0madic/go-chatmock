@@ -203,6 +203,7 @@ type ResponsesTool struct {
 	Description string `json:"description,omitempty"`
 	Strict      *bool  `json:"strict,omitempty"`
 	Parameters  any    `json:"parameters,omitempty"`
+	Format      any    `json:"format,omitempty"`
 }
 
 // UpstreamPayload represents the full payload sent to the ChatGPT backend.
