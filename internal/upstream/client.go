@@ -96,11 +96,11 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 
 	payload := responses.ResponseNewParams{
 		Model:             req.Model,
-		Input:             types.ResponsesInputItemsToSDKInput(req.InputItems),
-		Tools:             types.ResponsesToolsToSDKTools(req.Tools),
-		ToolChoice:        types.ToolChoiceToSDK(toolChoice),
+		Input:             responsesInputItemsToSDKInput(req.InputItems),
+		Tools:             responsesToolsToSDKTools(req.Tools),
+		ToolChoice:        toolChoiceToSDK(toolChoice),
 		ParallelToolCalls: openai.Bool(req.ParallelToolCalls),
-		Include:           types.IncludesToSDK(includes),
+		Include:           includesToSDK(includes),
 		PromptCacheKey:    openai.String(sessionID),
 	}
 	if req.Instructions != "" {
@@ -110,7 +110,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 		payload.Store = openai.Bool(*req.Store)
 	}
 	if req.ReasoningParam != nil {
-		payload.Reasoning = types.ReasoningToSDK(req.ReasoningParam)
+		payload.Reasoning = reasoningToSDK(req.ReasoningParam)
 	}
 
 	body, err := marshalWithStream(payload)
