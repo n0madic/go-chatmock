@@ -64,6 +64,17 @@ func (s *Server) handleUnifiedCompletions(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Passthrough path: when the Responses API route receives a native `input`
+	// field, send the request upstream with minimal patching to preserve all SDK
+	// fields (metadata, prompt_cache_retention, custom tool formats, etc.).
+	// On the chat route, requests with `input` still go through normalization
+	// (which handles system-message extraction, function_call injection, etc.)
+	// but the response format is still set to Responses API based on input source.
+	if route == universalRouteResponses && bodyHasInputField(body) {
+		s.handleResponsesPassthrough(w, r, body)
+		return
+	}
+
 	req, nerr := s.normalizeUniversalRequest(body, route)
 	if nerr != nil {
 		writeError(w, nerr.StatusCode, nerr.Message)
@@ -642,26 +653,22 @@ func composeInstructionsForRoute(
 	inputSystemInstructions string,
 	previousResponseID string,
 ) string {
-	switch route {
-	case universalRouteResponses:
-		instructions := joinNonEmpty("\n\n", strings.TrimSpace(clientInstructions), strings.TrimSpace(inputSystemInstructions))
-		if previousResponseID != "" && instructions == "" {
-			if prevInstructions, ok := s.responsesState.GetInstructions(previousResponseID); ok {
-				instructions = prevInstructions
-			}
+	client := joinNonEmpty("\n\n", strings.TrimSpace(clientInstructions), strings.TrimSpace(inputSystemInstructions))
+
+	if route == universalRouteResponses && previousResponseID != "" && client == "" {
+		if prevInstructions, ok := s.responsesState.GetInstructions(previousResponseID); ok {
+			return prevInstructions
 		}
-		return instructions
-	default:
-		client := joinNonEmpty("\n\n", strings.TrimSpace(clientInstructions), strings.TrimSpace(inputSystemInstructions))
-		// The proxy ships a built-in Codex system prompt, but IDE agents (e.g.
-		// Cursor) already include their own orchestration instructions. Mixing
-		// both would conflict and confuse the model, so we only use the built-in
-		// prompt when the client sends no instructions of its own.
-		if client != "" {
-			return client
-		}
-		return strings.TrimSpace(s.Config.InstructionsForModel(model))
 	}
+
+	// IDE agents (e.g. Cursor) already include their own orchestration
+	// instructions. Mixing both would conflict and confuse the model, so
+	// we only use the built-in prompt when the client sends no instructions
+	// of its own.
+	if client != "" {
+		return client
+	}
+	return strings.TrimSpace(s.Config.InstructionsForModel(model))
 }
 
 func joinNonEmpty(sep string, parts ...string) string {

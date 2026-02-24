@@ -38,10 +38,38 @@ go test ./internal/sse -run 'TranslateChatArgs|TranslateChatStress' -count=1
 
 - `POST /v1/chat/completions` -> `handleChatCompletions()` -> `handleUnifiedCompletions(..., universalRouteChat)`
 - `POST /v1/responses` -> `handleResponses()` -> `handleUnifiedCompletions(..., universalRouteResponses)`
+  - When the request body contains an `input` field (native Responses API format), the request is routed to `handleResponsesPassthrough()` which bypasses normalization and sends the request upstream with minimal patching (model, store, instructions, reasoning). This preserves all SDK fields (metadata, custom tool formats, prompt_cache_retention, etc.).
 - `POST /v1/completions` -> `handleCompletions()` (separate path, not unified)
 - `POST /api/chat` -> `handleOllamaChat()` (Ollama-specific transform path)
 
-The `route` parameter reflects the URL path. The **response format** is determined separately by `req.ResponseFormat`, which is derived from the request body: if the body uses `input` (Responses API shape), the response is Responses API format; if it uses `messages` (Chat shape), the response is Chat Completions format. This allows clients like Cursor that send `input` to `/v1/chat/completions` to receive Responses API events back.
+### Response Format Routing Rule
+
+**The response format is determined by the request format, NOT the URL route.** The `route` parameter only reflects the URL path. The actual response format (`req.ResponseFormat`) is derived from the request body:
+
+- Request uses `input` field (Responses API shape) -> response is **Responses API format** (SSE with `response.*` events or `ResponsesResponse` JSON)
+- Request uses `messages` field (Chat Completions shape) -> response is **Chat Completions format** (SSE with `chat.completion.chunk` or `ChatCompletionResponse` JSON)
+
+This means a Responses API request sent to `/v1/chat/completions` receives a Responses API response, and a Chat Completions request sent to `/v1/responses` receives a Chat Completions response. The route is irrelevant — only the request body shape matters. This allows clients like Cursor that send `input` to any endpoint to always receive Responses API events back.
+
+### Responses API Passthrough (`internal/proxy/responses_passthrough.go`)
+
+When the `/v1/responses` route receives a request body with a top-level `input` field (detected by `bodyHasInputField()`), the passthrough handler bypasses universal normalization entirely:
+- Patches only `model`, `store`, `instructions`, and `reasoning` in the raw JSON map.
+- Handles `previous_response_id` polyfill (local state) and conversation ID auto-resolution.
+- Sends the patched body via `DoRaw()` preserving all other SDK fields (metadata, custom tools, prompt_cache_retention, include, etc.).
+- Streams or collects the response using the same state-tracking logic as the normalized path.
+
+This is the primary path for Cursor and other Responses API native clients.
+
+Note: On the chat route (`/v1/chat/completions`), requests with `input` still go through normalization (which handles system-message extraction from input items, targeted function_call injection, server prompt fallback, etc.), but the **response format** is still set to Responses API based on input source — see the response format routing rule above.
+
+### Unified Request Handling Principle
+
+**Request processing is route-agnostic.** It does not matter which endpoint (`/v1/chat/completions` or `/v1/responses`) receives the request — the handling logic is unified and driven by the request body shape (`input` vs `messages`), not the URL path. The route only affects field priority when both are present:
+- On `/v1/responses`: prefer `input`, fallback to `messages`.
+- On `/v1/chat/completions`: prefer `messages`, fallback to `input`.
+
+Instructions, tools, reasoning, and all other fields are processed identically regardless of route. The built-in server prompt is used as fallback on both routes when no client instructions are provided.
 
 ### Universal Normalization Rules (`internal/proxy/universal.go`)
 
@@ -57,9 +85,7 @@ The `route` parameter reflects the URL path. The **response format** is determin
 - `responses_tools` is additive and currently supports only `web_search` / `web_search_preview`.
 - `tool_choice` and `parallel_tool_calls` are normalized from either schema.
 - System text from input/messages is folded into `instructions` when possible.
-- Route-specific instruction policy:
-  - chat route: client instructions take precedence; otherwise server prompt is used.
-  - responses route: client instructions are passed through; when empty and `previous_response_id` is present, prior stored instructions can be inherited.
+- Instruction policy is unified across routes: client instructions take precedence; when empty and `previous_response_id` is present (responses route), prior stored instructions are inherited; otherwise the built-in server prompt (`InstructionsForModel`) is used as fallback.
 - `conversation_id` / `conversationId` / `cursorConversationId` can be used to auto-resolve latest `previous_response_id` from local state.
 
 ### Local Tool-Loop Polyfill (`internal/proxy/responses_polyfill.go`)
@@ -111,11 +137,11 @@ The `route` parameter reflects the URL path. The **response format** is determin
 | Package | Role |
 |---------|------|
 | `proxy/` | HTTP server, middleware, route handlers, unified chat/responses normalization. |
-| `upstream/` | Builds and sends Codex Responses API requests. |
+| `upstream/` | Builds and sends Codex Responses API requests using `openai-go/v3` SDK param types. `Do()` builds `responses.ResponseNewParams` from custom types; `DoRaw()` forwards pre-built JSON for the passthrough path. |
 | `sse/` | SSE reader and stream translators for chat/text/ollama (responses translator kept for tests/utility). |
 | `responses-state/` | In-memory previous-response snapshots, function-call index, instructions, conversation mapping (TTL/capacity). |
 | `transform/` | Message/tool conversions between client-facing schemas and Responses input. |
-| `types/` | Shared request/response structs across OpenAI/Ollama/Responses/Anthropic shapes. |
+| `types/` | Shared request/response structs across OpenAI/Ollama/Responses/Anthropic shapes. `sdkcompat.go` provides converters from custom types to `openai-go/v3` SDK param types for the upstream boundary. |
 | `models/` | Model registry, alias normalization, reasoning-variant exposure. |
 | `reasoning/` | Effort/summary normalization and chat output formatting for compat modes. |
 | `auth/` | Auth persistence and token refresh. |

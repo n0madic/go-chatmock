@@ -2,3 +2,4 @@ go-chatmock
 *.log
 *.py
 *.pyc
+CLAUDE.md

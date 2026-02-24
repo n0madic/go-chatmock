@@ -79,8 +79,8 @@ type AnthropicContentOut struct {
 
 // AnthropicUsage holds Messages API usage.
 type AnthropicUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
 }
 
 // AnthropicModelListResponse is the response for GET /v1/models in Anthropic mode.

@@ -74,7 +74,7 @@ data: {"type":"response.output_item.done","item":{"type":"function_call","call_i
 
 data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}}
 
-data: {"type":"response.completed","response":{"id":"resp_456","created_at":1730000000}}
+data: {"type":"response.completed","response":{"id":"resp_456","object":"response","created_at":1730000000,"model":"gpt-5","status":"completed","output":[{"type":"function_call","call_id":"call_2","name":"search_files","arguments":"{\"pattern\":\"TODO\"}"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}]}}
 `
 	resp := &upstream.Response{
 		StatusCode: 200,
@@ -127,7 +127,7 @@ func TestCollectResponsesResponseMergesUsageFromCompletedEvent(t *testing.T) {
 
 data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}}
 
-data: {"type":"response.completed","response":{"id":"resp_usage","usage":{"output_tokens":6}}}
+data: {"type":"response.completed","response":{"id":"resp_usage","object":"response","created_at":1730000000,"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}],"usage":{"input_tokens":4,"output_tokens":6,"total_tokens":10}}}
 `
 	resp := &upstream.Response{
 		StatusCode: 200,
@@ -159,5 +159,39 @@ data: {"type":"response.completed","response":{"id":"resp_usage","usage":{"outpu
 	}
 	if out.Usage.TotalTokens != 10 {
 		t.Fatalf("total_tokens: got %d, want %d", out.Usage.TotalTokens, 10)
+	}
+}
+
+func TestCollectResponsesResponsePassesThroughUsageDetails(t *testing.T) {
+	s := &Server{responsesState: responsesstate.NewStore(5*time.Minute, 100)}
+	defer s.responsesState.Close()
+
+	stream := `data: {"type":"response.created","response":{"id":"resp_details"}}
+
+data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Ok"}]}}
+
+data: {"type":"response.completed","response":{"id":"resp_details","object":"response","created_at":1730000000,"status":"completed","model":"gpt-5","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30,"input_tokens_details":{"cached_tokens":5},"output_tokens_details":{"reasoning_tokens":8}}}}
+`
+	resp := &upstream.Response{
+		StatusCode: 200,
+		Body:       &http.Response{Body: io.NopCloser(strings.NewReader(stream))},
+	}
+	w := httptest.NewRecorder()
+
+	s.collectResponsesResponse(w, resp, "gpt-5", nil, "", "")
+
+	// Raw passthrough: the response body should contain usage details.
+	body := w.Body.String()
+	if !strings.Contains(body, `"input_tokens_details"`) {
+		t.Fatalf("expected input_tokens_details in response, got: %s", body)
+	}
+	if !strings.Contains(body, `"cached_tokens"`) {
+		t.Fatalf("expected cached_tokens in response, got: %s", body)
+	}
+	if !strings.Contains(body, `"output_tokens_details"`) {
+		t.Fatalf("expected output_tokens_details in response, got: %s", body)
+	}
+	if !strings.Contains(body, `"reasoning_tokens"`) {
+		t.Fatalf("expected reasoning_tokens in response, got: %s", body)
 	}
 }

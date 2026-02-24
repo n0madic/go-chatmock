@@ -64,9 +64,21 @@ type ResponsesOutputItem struct {
 
 // ResponsesUsage holds token usage for a Responses API response.
 type ResponsesUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens,omitempty"`
+	InputTokens         int64                        `json:"input_tokens"`
+	OutputTokens        int64                        `json:"output_tokens"`
+	TotalTokens         int64                        `json:"total_tokens,omitempty"`
+	InputTokensDetails  *ResponsesUsageInputDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails *ResponsesUsageOutputDetails `json:"output_tokens_details,omitempty"`
+}
+
+// ResponsesUsageInputDetails holds detailed input token breakdown for the Responses API.
+type ResponsesUsageInputDetails struct {
+	CachedTokens int64 `json:"cached_tokens,omitempty"`
+}
+
+// ResponsesUsageOutputDetails holds detailed output token breakdown for the Responses API.
+type ResponsesUsageOutputDetails struct {
+	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
 }
 
 // ResponsesInputItem represents a single item in the Responses API input array.
@@ -204,19 +216,4 @@ type ResponsesTool struct {
 	Strict      *bool  `json:"strict,omitempty"`
 	Parameters  any    `json:"parameters,omitempty"`
 	Format      any    `json:"format,omitempty"`
-}
-
-// UpstreamPayload represents the full payload sent to the ChatGPT backend.
-type UpstreamPayload struct {
-	Model             string               `json:"model"`
-	Instructions      string               `json:"instructions"`
-	Input             []ResponsesInputItem `json:"input"`
-	Tools             []ResponsesTool      `json:"tools"`
-	ToolChoice        any                  `json:"tool_choice"`
-	ParallelToolCalls bool                 `json:"parallel_tool_calls"`
-	Store             *bool                `json:"store,omitempty"`
-	Stream            bool                 `json:"stream"`
-	PromptCacheKey    string               `json:"prompt_cache_key"`
-	Include           []string             `json:"include,omitempty"`
-	Reasoning         *ReasoningParam      `json:"reasoning,omitempty"`
 }

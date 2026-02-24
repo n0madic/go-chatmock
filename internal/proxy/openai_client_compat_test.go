@@ -26,9 +26,10 @@ type queuedUpstreamResult struct {
 }
 
 type queuedUpstreamClient struct {
-	mu      sync.Mutex
-	results []queuedUpstreamResult
-	calls   []*upstream.Request
+	mu       sync.Mutex
+	results  []queuedUpstreamResult
+	calls    []*upstream.Request
+	rawCalls []json.RawMessage
 }
 
 func (c *queuedUpstreamClient) Do(_ context.Context, req *upstream.Request) (*upstream.Response, error) {
@@ -66,6 +67,33 @@ func (c *queuedUpstreamClient) Do(_ context.Context, req *upstream.Request) (*up
 		Body:       httpResp,
 		Headers:    headers,
 	}, nil
+}
+
+func (c *queuedUpstreamClient) DoRaw(_ context.Context, body []byte, _ string) (*upstream.Response, error) {
+	// Reconstruct an upstream.Request from the raw JSON for test assertions.
+	var raw map[string]any
+	_ = json.Unmarshal(body, &raw)
+
+	req := &upstream.Request{
+		Model:        stringFromAny(raw["model"]),
+		Instructions: stringFromAny(raw["instructions"]),
+	}
+	if s, ok := raw["store"].(bool); ok {
+		req.Store = &s
+	}
+	// Parse input items from raw JSON
+	if inputRaw, ok := raw["input"]; ok {
+		inputBytes, _ := json.Marshal(inputRaw)
+		var items []types.ResponsesInputItem
+		_ = json.Unmarshal(inputBytes, &items)
+		req.InputItems = items
+	}
+
+	c.mu.Lock()
+	c.rawCalls = append(c.rawCalls, json.RawMessage(body))
+	c.mu.Unlock()
+
+	return c.Do(context.Background(), req)
 }
 
 func cloneUpstreamRequest(in *upstream.Request) *upstream.Request {
@@ -177,7 +205,7 @@ func TestOpenAIClientCompatChatCompletionsAcceptsResponsesShape(t *testing.T) {
 
 data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Accepted input field"}]}}
 
-data: {"type":"response.completed","response":{"id":"resp_chat_input"}}
+data: {"type":"response.completed","response":{"id":"resp_chat_input","object":"response","model":"gpt-5","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Accepted input field"}]}]}}
 `,
 			},
 		},
@@ -226,7 +254,7 @@ func TestOpenAIClientCompatChatCompletionsAcceptsResponsesStyleTools(t *testing.
 
 data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"ReadFile","arguments":"{\"path\":\"README.md\"}"}}
 
-data: {"type":"response.completed","response":{"id":"resp_chat_tools"}}
+data: {"type":"response.completed","response":{"id":"resp_chat_tools","object":"response","model":"gpt-5","status":"completed","output":[{"type":"function_call","call_id":"call_1","name":"ReadFile","arguments":"{\"path\":\"README.md\"}"}]}}
 `,
 			},
 		},
@@ -357,7 +385,7 @@ func TestOpenAIClientCompatResponsesNonStream(t *testing.T) {
 
 data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}}
 
-data: {"type":"response.completed","response":{"id":"resp_1","created_at":1730000000,"usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}
+data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":1730000000,"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}],"usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}
 `,
 			},
 		},
@@ -399,6 +427,57 @@ data: {"type":"response.completed","response":{"id":"resp_1","created_at":173000
 	}
 	if up.calls[0].Store == nil || *up.calls[0].Store {
 		t.Fatalf("expected upstream store=false compatibility mode, got %+v", up.calls[0].Store)
+	}
+}
+
+func TestOpenAIClientCompatResponsesStringInputNormalizedToArray(t *testing.T) {
+	up := &queuedUpstreamClient{
+		results: []queuedUpstreamResult{
+			{
+				body: `data: {"type":"response.created","response":{"id":"resp_str"}}
+
+data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi"}]}}
+
+data: {"type":"response.completed","response":{"id":"resp_str","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi"}]}]}}
+`,
+			},
+		},
+	}
+	s := newCompatTestServerT(t, up)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+		"model":"gpt-5",
+		"input":"Hello string input",
+		"stream":false
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleResponses(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want %d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	// The passthrough path must normalize string input to array before sending upstream.
+	if len(up.rawCalls) != 1 {
+		t.Fatalf("expected 1 raw call, got %d", len(up.rawCalls))
+	}
+	var rawBody map[string]any
+	if err := json.Unmarshal(up.rawCalls[0], &rawBody); err != nil {
+		t.Fatalf("unmarshal raw call: %v", err)
+	}
+	inputRaw, ok := rawBody["input"]
+	if !ok {
+		t.Fatal("expected input field in upstream request")
+	}
+	// Input must be an array, not a string.
+	if _, isString := inputRaw.(string); isString {
+		t.Fatal("upstream input should be array, but got string")
+	}
+	inputArr, ok := inputRaw.([]any)
+	if !ok || len(inputArr) == 0 {
+		t.Fatalf("upstream input should be non-empty array, got %T: %v", inputRaw, inputRaw)
 	}
 }
 

@@ -156,6 +156,50 @@ func TestComposeInstructionsForRouteChatFallsBackToBasePrompt(t *testing.T) {
 	}
 }
 
+func TestComposeInstructionsForRouteResponsesFallsBackToBasePrompt(t *testing.T) {
+	s := &Server{
+		Config: &config.ServerConfig{
+			BaseInstructions: "base instructions",
+		},
+	}
+
+	got := composeInstructionsForRoute(
+		s,
+		universalRouteResponses,
+		"gpt-5",
+		"",
+		"",
+		"",
+	)
+
+	want := "base instructions"
+	if got != want {
+		t.Fatalf("composeInstructionsForRoute(responses fallback) = %q, want %q", got, want)
+	}
+}
+
+func TestComposeInstructionsForRouteResponsesPrefersClientInstructions(t *testing.T) {
+	s := &Server{
+		Config: &config.ServerConfig{
+			BaseInstructions: "base instructions",
+		},
+	}
+
+	got := composeInstructionsForRoute(
+		s,
+		universalRouteResponses,
+		"gpt-5",
+		"client instructions",
+		"",
+		"",
+	)
+
+	want := "client instructions"
+	if got != want {
+		t.Fatalf("composeInstructionsForRoute(responses client) = %q, want %q", got, want)
+	}
+}
+
 func TestNormalizeUniversalRequestResponsesDebugModelBypassesValidation(t *testing.T) {
 	s := &Server{
 		Config: &config.ServerConfig{

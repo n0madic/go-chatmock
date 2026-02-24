@@ -11,6 +11,9 @@ import (
 	"sync"
 	"time"
 
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/responses"
+
 	"github.com/n0madic/go-chatmock/internal/auth"
 	"github.com/n0madic/go-chatmock/internal/config"
 	"github.com/n0madic/go-chatmock/internal/session"
@@ -75,6 +78,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 
 	sessionID := c.Sessions.EnsureSessionID(req.Instructions, req.InputItems, req.SessionID)
 
+	// Normalize tool_choice for upstream
 	toolChoice := req.ToolChoice
 	switch tc := toolChoice.(type) {
 	case string:
@@ -87,49 +91,80 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 		toolChoice = "auto"
 	}
 
-	payload := types.UpstreamPayload{
+	// Build SDK payload
+	includes := mergeIncludes(req.Include, req.ReasoningParam != nil)
+
+	payload := responses.ResponseNewParams{
 		Model:             req.Model,
-		Instructions:      req.Instructions,
-		Input:             req.InputItems,
-		Tools:             req.Tools,
-		ToolChoice:        toolChoice,
-		ParallelToolCalls: req.ParallelToolCalls,
-		Store:             req.Store,
-		Stream:            true,
-		PromptCacheKey:    sessionID,
+		Input:             types.ResponsesInputItemsToSDKInput(req.InputItems),
+		Tools:             types.ResponsesToolsToSDKTools(req.Tools),
+		ToolChoice:        types.ToolChoiceToSDK(toolChoice),
+		ParallelToolCalls: openai.Bool(req.ParallelToolCalls),
+		Include:           types.IncludesToSDK(includes),
+		PromptCacheKey:    openai.String(sessionID),
 	}
-	payload.Include = mergeIncludes(req.Include, req.ReasoningParam != nil)
+	if req.Instructions != "" {
+		payload.Instructions = openai.String(req.Instructions)
+	}
+	if req.Store != nil {
+		payload.Store = openai.Bool(*req.Store)
+	}
 	if req.ReasoningParam != nil {
-		payload.Reasoning = req.ReasoningParam
+		payload.Reasoning = types.ReasoningToSDK(req.ReasoningParam)
+	}
+
+	body, err := marshalWithStream(payload)
+	if err != nil {
+		return nil, err
 	}
 
 	if c.Verbose {
 		reasoningEffort := ""
 		reasoningSummary := ""
-		if payload.Reasoning != nil {
-			reasoningEffort = payload.Reasoning.Effort
-			reasoningSummary = payload.Reasoning.Summary
+		if req.ReasoningParam != nil {
+			reasoningEffort = req.ReasoningParam.Effort
+			reasoningSummary = req.ReasoningParam.Summary
 		}
 		slog.Info("upstream.request",
-			"model", payload.Model,
-			"input_items", len(payload.Input),
-			"tools", len(payload.Tools),
-			"tool_choice", summarizeToolChoice(payload.ToolChoice),
-			"parallel_tool_calls", payload.ParallelToolCalls,
-			"include_count", len(payload.Include),
-			"store", boolPtrState(payload.Store),
+			"model", req.Model,
+			"input_items", len(req.InputItems),
+			"tools", len(req.Tools),
+			"tool_choice", summarizeToolChoice(toolChoice),
+			"parallel_tool_calls", req.ParallelToolCalls,
+			"include_count", len(includes),
+			"store", boolPtrState(req.Store),
 			"reasoning_effort", reasoningEffort,
 			"reasoning_summary", reasoningSummary,
-			"instructions_chars", len(payload.Instructions),
+			"instructions_chars", len(req.Instructions),
 			"session_id", sessionID,
 		)
 	}
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal payload: %w", err)
+	return c.sendPayload(ctx, body, sessionID, accessToken, accountID)
+}
+
+// DoRaw sends a pre-built JSON payload (with stream=true injected) to the
+// ChatGPT backend. This is used for the Responses API passthrough path where
+// the client request is forwarded with minimal transformation, preserving all
+// SDK fields (metadata, prompt_cache_retention, custom tool formats, etc.).
+func (c *Client) DoRaw(ctx context.Context, body []byte, sessionID string) (*Response, error) {
+	accessToken, accountID, err := c.TokenManager.GetEffectiveAuth()
+	if err != nil || accessToken == "" || accountID == "" {
+		return nil, auth.ErrNoCredentials
 	}
 
+	if c.Verbose {
+		slog.Info("upstream.request.raw",
+			"body_len", len(body),
+			"session_id", sessionID,
+		)
+	}
+
+	return c.sendPayload(ctx, body, sessionID, accessToken, accountID)
+}
+
+// sendPayload is the shared HTTP send logic for both Do and DoRaw.
+func (c *Client) sendPayload(ctx context.Context, body []byte, sessionID, accessToken, accountID string) (*Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", config.ResponsesURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -164,6 +199,26 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 		Body:       resp,
 		Headers:    resp.Header,
 	}, nil
+}
+
+// marshalWithStream marshals an SDK payload and injects stream=true.
+// The SDK ResponseNewParams does not have a stream field; we add it
+// manually so the upstream receives stream=true.
+func marshalWithStream(payload any) ([]byte, error) {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+	var payloadMap map[string]any
+	if err := json.Unmarshal(payloadJSON, &payloadMap); err != nil {
+		return nil, fmt.Errorf("failed to parse payload JSON: %w", err)
+	}
+	payloadMap["stream"] = true
+	body, err := json.Marshal(payloadMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+	return body, nil
 }
 
 func summarizeToolChoice(choice any) string {

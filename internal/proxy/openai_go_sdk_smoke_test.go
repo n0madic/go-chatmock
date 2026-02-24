@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	openai "github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/responses"
-	"github.com/openai/openai-go/shared"
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 )
 
 func newSDKSmokeHTTPServer(t *testing.T, up *queuedUpstreamClient) *httptest.Server {
@@ -94,18 +94,16 @@ data: {"type":"response.completed","response":{"id":"resp_sdk_chat_stream"}}
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			openai.UserMessage("weather in Paris"),
 		},
-		Tools: []openai.ChatCompletionToolParam{
-			{
-				Function: shared.FunctionDefinitionParam{
-					Name: "get_weather",
-					Parameters: shared.FunctionParameters{
-						"type": "object",
-						"properties": map[string]any{
-							"city": map[string]any{"type": "string"},
-						},
+		Tools: []openai.ChatCompletionToolUnionParam{
+			openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+				Name: "get_weather",
+				Parameters: shared.FunctionParameters{
+					"type": "object",
+					"properties": map[string]any{
+						"city": map[string]any{"type": "string"},
 					},
 				},
-			},
+			}),
 		},
 	})
 
@@ -151,7 +149,7 @@ data: {"type":"response.completed","response":{"id":"resp_sdk_loop_1"}}
 
 data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"21C"}]}}
 
-data: {"type":"response.completed","response":{"id":"resp_sdk_loop_2"}}
+data: {"type":"response.completed","response":{"id":"resp_sdk_loop_2","object":"response","model":"gpt-5","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"21C"}]}]}}
 `,
 			},
 		},

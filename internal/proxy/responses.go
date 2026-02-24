@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/n0madic/go-chatmock/internal/responses-state"
+	responsesstate "github.com/n0madic/go-chatmock/internal/responses-state"
 	"github.com/n0madic/go-chatmock/internal/sse"
 	"github.com/n0madic/go-chatmock/internal/types"
 	"github.com/n0madic/go-chatmock/internal/upstream"
@@ -31,11 +31,9 @@ func (s *Server) collectResponsesResponse(
 	reader := sse.NewReader(resp.Body.Body)
 	var outputItems []types.ResponsesOutputItem
 	var responseID string
-	var createdAt int64
-	var usageObj *types.ResponsesUsage
 	var errorMsg string
+	var rawResponse map[string]any
 	var toolCalls []responsesstate.FunctionCall
-	status := "completed"
 
 	for {
 		evt, err := reader.Next()
@@ -46,12 +44,6 @@ func (s *Server) collectResponsesResponse(
 		if r, ok := evt.Data["response"].(map[string]any); ok {
 			if id, ok := r["id"].(string); ok && id != "" {
 				responseID = id
-			}
-			if ca, ok := r["created_at"].(float64); ok {
-				createdAt = int64(ca)
-			}
-			if u, ok := r["usage"].(map[string]any); ok {
-				usageObj = mergeResponsesUsage(usageObj, u)
 			}
 		}
 
@@ -65,7 +57,6 @@ func (s *Server) collectResponsesResponse(
 				outputItems = append(outputItems, unmarshalOutputItem(item))
 			}
 		case "response.failed":
-			status = "failed"
 			if r, ok := evt.Data["response"].(map[string]any); ok {
 				if e, ok := r["error"].(map[string]any); ok {
 					errorMsg, _ = e["message"].(string)
@@ -74,9 +65,11 @@ func (s *Server) collectResponsesResponse(
 			if errorMsg == "" {
 				errorMsg = "response.failed"
 			}
-			// goto is the only way to break out of a switch inside a for loop.
 			goto done
 		case "response.completed":
+			if r, ok := evt.Data["response"].(map[string]any); ok {
+				rawResponse = r
+			}
 			goto done
 		}
 	}
@@ -91,55 +84,25 @@ done:
 		return
 	}
 
-	if createdAt == 0 {
-		createdAt = time.Now().Unix()
+	// Passthrough the full upstream response object, patching only the model.
+	if rawResponse != nil {
+		rawResponse["model"] = model
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		json.NewEncoder(w).Encode(rawResponse)
+		return
 	}
 
+	// Fallback: no raw response captured (e.g. stream ended without response.completed).
 	result := types.ResponsesResponse{
 		ID:        responseID,
 		Object:    "response",
-		CreatedAt: createdAt,
+		CreatedAt: time.Now().Unix(),
 		Model:     model,
 		Output:    outputItems,
-		Status:    status,
-		Usage:     usageObj,
+		Status:    "completed",
 	}
 	writeJSON(w, resp.StatusCode, result)
-}
-
-func mergeResponsesUsage(current *types.ResponsesUsage, usage map[string]any) *types.ResponsesUsage {
-	if len(usage) == 0 {
-		return current
-	}
-
-	_, hasInput := usage["input_tokens"]
-	_, hasOutput := usage["output_tokens"]
-	totalRaw, hasTotal := usage["total_tokens"]
-	if !hasInput && !hasOutput && !hasTotal {
-		return current
-	}
-
-	if current == nil {
-		current = &types.ResponsesUsage{}
-	}
-
-	if hasInput {
-		current.InputTokens = types.IntFromAny(usage["input_tokens"])
-	}
-	if hasOutput {
-		current.OutputTokens = types.IntFromAny(usage["output_tokens"])
-	}
-	if hasTotal {
-		current.TotalTokens = types.IntFromAny(totalRaw)
-	} else if hasInput || hasOutput {
-		// Preserve fallback behavior when total_tokens is absent.
-		current.TotalTokens = current.InputTokens + current.OutputTokens
-	}
-	if current.TotalTokens == 0 {
-		current.TotalTokens = current.InputTokens + current.OutputTokens
-	}
-
-	return current
 }
 
 func (s *Server) streamResponsesWithState(

@@ -23,6 +23,7 @@ import (
 // be tested with a mock without a real network connection.
 type upstreamDoer interface {
 	Do(context.Context, *upstream.Request) (*upstream.Response, error)
+	DoRaw(ctx context.Context, body []byte, sessionID string) (*upstream.Response, error)
 }
 
 // Server is the main proxy HTTP server.
