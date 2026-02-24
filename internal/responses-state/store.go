@@ -63,17 +63,7 @@ func (s *Store) Put(responseID string, calls []FunctionCall) {
 		return
 	}
 
-	callMap := make(map[string]FunctionCall)
-	for _, c := range calls {
-		if c.CallID == "" || c.Name == "" {
-			continue
-		}
-		callMap[c.CallID] = FunctionCall{
-			CallID:    c.CallID,
-			Name:      c.Name,
-			Arguments: c.Arguments,
-		}
-	}
+	callMap := buildCallMap(calls)
 	if len(callMap) == 0 {
 		return
 	}
@@ -84,13 +74,7 @@ func (s *Store) Put(responseID string, calls []FunctionCall) {
 	defer s.mu.Unlock()
 
 	s.cleanupExpiredLocked(now)
-	e, ok := s.entries[responseID]
-	if !ok {
-		e = &entry{}
-		s.entries[responseID] = e
-	}
-	e.calls = callMap
-	e.lastAccess = now
+	s.putCallsLocked(responseID, callMap, now)
 	s.evictIfNeededLocked()
 }
 
@@ -107,27 +91,36 @@ func (s *Store) PutContext(responseID string, context []types.ResponsesInputItem
 	defer s.mu.Unlock()
 
 	s.cleanupExpiredLocked(now)
-	e, ok := s.entries[responseID]
-	if !ok {
-		e = &entry{}
-		s.entries[responseID] = e
-	}
-	e.context = ctxCopy
-	e.lastAccess = now
+	s.putContextLocked(responseID, ctxCopy, now)
 	s.evictIfNeededLocked()
 }
 
-// PutSnapshot saves both context and function calls for a response id.
+// PutSnapshot saves both context and function calls for a response id atomically.
 func (s *Store) PutSnapshot(responseID string, context []types.ResponsesInputItem, calls []FunctionCall) {
 	if responseID == "" {
 		return
 	}
-	if len(context) > 0 {
-		s.PutContext(responseID, context)
+
+	ctxCopy := cloneInputItems(context)
+	callMap := buildCallMap(calls)
+
+	if len(ctxCopy) == 0 && len(callMap) == 0 {
+		return
 	}
-	if len(calls) > 0 {
-		s.Put(responseID, calls)
+
+	now := time.Now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cleanupExpiredLocked(now)
+	if len(ctxCopy) > 0 {
+		s.putContextLocked(responseID, ctxCopy, now)
 	}
+	if len(callMap) > 0 {
+		s.putCallsLocked(responseID, callMap, now)
+	}
+	s.evictIfNeededLocked()
 }
 
 // PutInstructions saves effective instructions for a response id.
@@ -296,6 +289,41 @@ func (s *Store) Len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.entries)
+}
+
+func buildCallMap(calls []FunctionCall) map[string]FunctionCall {
+	callMap := make(map[string]FunctionCall)
+	for _, c := range calls {
+		if c.CallID == "" || c.Name == "" {
+			continue
+		}
+		callMap[c.CallID] = FunctionCall{
+			CallID:    c.CallID,
+			Name:      c.Name,
+			Arguments: c.Arguments,
+		}
+	}
+	return callMap
+}
+
+func (s *Store) putCallsLocked(responseID string, callMap map[string]FunctionCall, now time.Time) {
+	e, ok := s.entries[responseID]
+	if !ok {
+		e = &entry{}
+		s.entries[responseID] = e
+	}
+	e.calls = callMap
+	e.lastAccess = now
+}
+
+func (s *Store) putContextLocked(responseID string, ctxCopy []types.ResponsesInputItem, now time.Time) {
+	e, ok := s.entries[responseID]
+	if !ok {
+		e = &entry{}
+		s.entries[responseID] = e
+	}
+	e.context = ctxCopy
+	e.lastAccess = now
 }
 
 func (s *Store) cleanupExpiredLocked(now time.Time) {

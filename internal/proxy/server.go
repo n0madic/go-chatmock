@@ -31,6 +31,7 @@ type Server struct {
 	Registry       *models.Registry
 	responsesState *responsesstate.Store
 	debugDumpMu    sync.Mutex
+	cancelBg       context.CancelFunc
 }
 
 const serverAccessTokenError = "Invalid or missing server access token"
@@ -50,7 +51,20 @@ func New(cfg *config.ServerConfig) *Server {
 
 	// Pre-fetch available models in background so the registry is ready for
 	// the first incoming request.
-	go func() { reg.GetModels() }()
+	bgCtx, cancel := context.WithCancel(context.Background())
+	s.cancelBg = cancel
+	go func() {
+		done := make(chan struct{})
+		go func() {
+			reg.GetModels()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-bgCtx.Done():
+			slog.Debug("background model prefetch cancelled")
+		}
+	}()
 
 	mux := http.NewServeMux()
 
@@ -98,6 +112,9 @@ func (s *Server) ListenAndServe() error {
 
 // Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.cancelBg != nil {
+		s.cancelBg()
+	}
 	return s.httpServer.Shutdown(ctx)
 }
 
@@ -111,15 +128,11 @@ func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			origin = "*"
-		}
 		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
 		if reqHeaders == "" {
 			reqHeaders = "Authorization, Content-Type, Accept"
 		}
-		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
 		w.Header().Set("Access-Control-Max-Age", "86400")

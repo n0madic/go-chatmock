@@ -41,7 +41,9 @@ func EnsureSessionID(instructions string, inputItems []types.ResponsesInputItem,
 	order = append(order, fp)
 	if len(order) > maxEntries {
 		oldest := order[0]
-		order = order[1:]
+		copy(order, order[1:])
+		order[len(order)-1] = ""
+		order = order[:len(order)-1]
 		delete(fingerprintMap, oldest)
 	}
 	return sid

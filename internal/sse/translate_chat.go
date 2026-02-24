@@ -45,8 +45,9 @@ type chatTranslatorState struct {
 	hiddenText  map[string]bool
 
 	// Output helpers (set once, closed over in TranslateChat)
-	writeChunk func(any)
-	writeDone  func()
+	writeChunk  func(any)
+	writeDone   func()
+	writeFailed bool
 }
 
 func (st *chatTranslatorState) makeDelta(delta types.ChatDelta) types.ChatCompletionChunk {
@@ -371,23 +372,40 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 	}
 
 	st.writeChunk = func(chunk any) {
+		if st.writeFailed {
+			return
+		}
 		data, err := json.Marshal(chunk)
 		if err != nil {
 			slog.Error("failed to marshal SSE chunk", "error", err)
 			return
 		}
-		fmt.Fprintf(w, "data: %s\n\n", data)
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+			slog.Debug("client disconnected during SSE write", "error", err)
+			st.writeFailed = true
+			return
+		}
 		flusher.Flush()
 	}
 
 	st.writeDone = func() {
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		if st.writeFailed {
+			return
+		}
+		if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
+			slog.Debug("client disconnected during SSE done", "error", err)
+			st.writeFailed = true
+			return
+		}
 		flusher.Flush()
 	}
 
 	reader := NewReader(body)
 
 	for {
+		if st.writeFailed {
+			break
+		}
 		evt, err := reader.Next()
 		if err != nil {
 			break

@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -203,9 +204,15 @@ func (s *Server) streamResponsesWithState(
 
 // unmarshalOutputItem converts a raw map to ResponsesOutputItem via JSON round-trip.
 func unmarshalOutputItem(item map[string]any) types.ResponsesOutputItem {
-	b, _ := json.Marshal(item)
+	b, err := json.Marshal(item)
+	if err != nil {
+		slog.Error("unmarshalOutputItem: marshal failed", "error", err)
+		return types.ResponsesOutputItem{}
+	}
 	var out types.ResponsesOutputItem
-	json.Unmarshal(b, &out) //nolint:errcheck
+	if err := json.Unmarshal(b, &out); err != nil {
+		slog.Error("unmarshalOutputItem: unmarshal failed", "error", err)
+	}
 	return out
 }
 
