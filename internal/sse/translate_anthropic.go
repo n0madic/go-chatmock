@@ -247,18 +247,31 @@ func TranslateAnthropic(w http.ResponseWriter, body io.ReadCloser, model string)
 		}
 	}
 
-	if st.started {
-		closeTextBlock()
-		_ = writeEvent("message_delta", map[string]any{
-			"type": "message_delta",
-			"delta": map[string]any{
-				"stop_reason":   "end_turn",
-				"stop_sequence": nil,
+	if !st.started {
+		// Upstream returned HTTP 200 but sent no SSE events (empty body,
+		// Connection: close, etc.).  Emit a well-formed Anthropic error so the
+		// client doesn't hang waiting for data.
+		startIfNeeded()
+		_ = writeEvent("error", types.AnthropicErrorResponse{
+			Type: "error",
+			Error: types.AnthropicErrorBody{
+				Type:    "api_error",
+				Message: "upstream returned empty response",
 			},
-			"usage": types.AnthropicUsage{},
 		})
-		_ = writeEvent("message_stop", map[string]any{"type": "message_stop"})
+		return
 	}
+
+	closeTextBlock()
+	_ = writeEvent("message_delta", map[string]any{
+		"type": "message_delta",
+		"delta": map[string]any{
+			"stop_reason":   "end_turn",
+			"stop_sequence": nil,
+		},
+		"usage": types.AnthropicUsage{},
+	})
+	_ = writeEvent("message_stop", map[string]any{"type": "message_stop"})
 }
 
 func responseID(data map[string]any) string {
