@@ -26,6 +26,7 @@ const (
 )
 
 type universalRequest struct {
+	ResponseFormat          universalRoute // "chat" or "responses", derived from input format
 	RequestedModel          string
 	Model                   string
 	Stream                  bool
@@ -152,7 +153,7 @@ func (s *Server) handleUnifiedCompletions(w http.ResponseWriter, r *http.Request
 		outputModel = req.Model
 	}
 
-	if route == universalRouteChat {
+	if req.ResponseFormat == universalRouteChat {
 		created := time.Now().Unix()
 		if req.Stream {
 			writeSSEHeaders(w, resp.StatusCode)
@@ -255,7 +256,13 @@ func (s *Server) normalizeUniversalRequest(body []byte, route universalRoute) (*
 	}
 	includeUsage := chatReq.StreamOptions != nil && chatReq.StreamOptions.IncludeUsage
 
+	responseFormat := universalRouteChat
+	if inputSource == "input" {
+		responseFormat = universalRouteResponses
+	}
+
 	return &universalRequest{
+		ResponseFormat:          responseFormat,
 		RequestedModel:          requestedModel,
 		Model:                   model,
 		Stream:                  stream,

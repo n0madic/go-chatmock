@@ -175,7 +175,7 @@ func TestOpenAIClientCompatChatCompletionsAcceptsResponsesShape(t *testing.T) {
 			{
 				body: `data: {"type":"response.created","response":{"id":"resp_chat_input"}}
 
-data: {"type":"response.output_text.delta","delta":"Accepted input field"}
+data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Accepted input field"}]}}
 
 data: {"type":"response.completed","response":{"id":"resp_chat_input"}}
 `,
@@ -198,12 +198,17 @@ data: {"type":"response.completed","response":{"id":"resp_chat_input"}}
 		t.Fatalf("status: got %d want %d body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
 
-	var out types.ChatCompletionResponse
+	// When the request uses the "input" field, the response format should be
+	// Responses API (passthrough), not Chat Completions.
+	var out types.ResponsesResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
 	}
-	if len(out.Choices) != 1 || out.Choices[0].Message.Content != "Accepted input field" {
-		t.Fatalf("unexpected chat response: %+v", out)
+	if out.ID != "resp_chat_input" {
+		t.Fatalf("unexpected response ID: got %q want %q", out.ID, "resp_chat_input")
+	}
+	if len(out.Output) != 1 || out.Output[0].Content[0].Text != "Accepted input field" {
+		t.Fatalf("unexpected responses output: %+v", out)
 	}
 	if len(up.calls) != 1 || len(up.calls[0].InputItems) != 1 {
 		t.Fatalf("unexpected upstream calls: %+v", up.calls)
@@ -248,19 +253,20 @@ data: {"type":"response.completed","response":{"id":"resp_chat_tools"}}
 		t.Fatalf("status: got %d want %d body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
 
-	var out types.ChatCompletionResponse
+	// When the request uses the "input" field, the response format should be
+	// Responses API (passthrough), not Chat Completions.
+	var out types.ResponsesResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
 	}
-	if len(out.Choices) != 1 {
-		t.Fatalf("expected one choice, got %+v", out.Choices)
+	if out.ID != "resp_chat_tools" {
+		t.Fatalf("unexpected response ID: got %q want %q", out.ID, "resp_chat_tools")
 	}
-	if len(out.Choices[0].Message.ToolCalls) != 1 {
-		t.Fatalf("expected one tool call in chat response, got %+v", out.Choices[0].Message.ToolCalls)
+	if len(out.Output) != 1 {
+		t.Fatalf("expected one output item, got %+v", out.Output)
 	}
-	tc := out.Choices[0].Message.ToolCalls[0]
-	if tc.Function.Name != "ReadFile" || !strings.Contains(tc.Function.Arguments, `"path":"README.md"`) {
-		t.Fatalf("unexpected tool call in chat response: %+v", tc)
+	if out.Output[0].Type != "function_call" || out.Output[0].Name != "ReadFile" || !strings.Contains(out.Output[0].Arguments, `"path":"README.md"`) {
+		t.Fatalf("unexpected function call in responses output: %+v", out.Output[0])
 	}
 
 	if len(up.calls) != 1 {
