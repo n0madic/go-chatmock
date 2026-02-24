@@ -41,15 +41,19 @@ go test ./internal/sse -run 'TranslateChatArgs|TranslateChatStress' -count=1
 - `POST /v1/completions` -> `handleCompletions()` (separate path, not unified)
 - `POST /api/chat` -> `handleOllamaChat()` (Ollama-specific transform path)
 
+The `route` parameter reflects the URL path. The **response format** is determined separately by `req.ResponseFormat`, which is derived from the request body: if the body uses `input` (Responses API shape), the response is Responses API format; if it uses `messages` (Chat shape), the response is Chat Completions format. This allows clients like Cursor that send `input` to `/v1/chat/completions` to receive Responses API events back.
+
 ### Universal Normalization Rules (`internal/proxy/universal.go`)
 
 - Body is decoded into both Chat and Responses request structs from the same raw JSON.
 - Input source precedence:
   - On chat route: prefer `messages`, fallback to valid `input`, then fallback to `prompt`.
   - On responses route: prefer `input`, fallback to valid `messages`, then fallback to `prompt`.
-- Tool normalization accepts both shapes:
+- Tool normalization accepts multiple shapes:
   - Chat tools: `{"type":"function","function":{...}}`
   - Responses tools: `{"type":"function","name":"...","parameters":...}`
+  - Custom tools: `{"type":"custom","name":"...","format":...}` (e.g. Cursor's `ApplyPatch` with grammar-based format)
+- Tool selection preference follows `ResponseFormat`: when the request uses `input` (Responses API format), Responses-style tool parsing is preferred, which supports `custom` tool types that Chat format cannot represent.
 - `responses_tools` is additive and currently supports only `web_search` / `web_search_preview`.
 - `tool_choice` and `parallel_tool_calls` are normalized from either schema.
 - System text from input/messages is folded into `instructions` when possible.

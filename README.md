@@ -97,7 +97,7 @@ All flags can also be set via environment variables:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/v1/chat/completions` | Chat completions (streaming and non-streaming) |
+| `POST` | `/v1/chat/completions` | Chat completions (streaming and non-streaming); accepts both `messages` (Chat) and `input` (Responses API) request formats — response format matches request format |
 | `POST` | `/v1/completions` | Text completions |
 | `POST` | `/v1/responses` | Responses API (streaming and non-streaming) |
 | `GET` | `/v1/models` | List available models |
@@ -161,7 +161,7 @@ When `--access-token` is set, all API routes except `/` and `/health` require `A
 
 - **Streaming and non-streaming** responses for both OpenAI and Ollama formats
 - **Anthropic Messages API gateway** for Claude Code (`/v1/messages`, `/v1/messages/count_tokens`, `/v1/models` dual schema)
-- **Responses API support** (`/v1/responses`) including local tool-loop continuity
+- **Responses API support** (`/v1/responses` and `input` field on `/v1/chat/completions`) including local tool-loop continuity
 - **Tool/function calling** support with automatic format translation
 - **Vision/image** support (base64 images in Ollama format are converted automatically)
 - **Reasoning effort** control per-request or globally via server flags
