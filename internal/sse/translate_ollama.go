@@ -50,11 +50,13 @@ func TranslateOllama(w http.ResponseWriter, body io.ReadCloser, model, createdAt
 		flusher.Flush()
 	}
 
+	gotEvents := false
 	for {
 		evt, err := reader.Next()
 		if err != nil {
 			break
 		}
+		gotEvents = true
 
 		switch evt.Type {
 		case "response.reasoning_summary_part.added":
@@ -114,6 +116,18 @@ func TranslateOllama(w http.ResponseWriter, body io.ReadCloser, model, createdAt
 	}
 
 	// Stream ended without response.completed
+	if !gotEvents {
+		errChunk := types.OllamaStreamChunk{
+			Model: model, CreatedAt: createdAt,
+			Message: types.OllamaMessage{Role: "assistant", Content: "Error: upstream returned empty response"},
+			Done:    true,
+		}
+		errChunk.OllamaFakeEval = types.OllamaFakeEvalDefaults
+		data, _ := json.Marshal(errChunk)
+		fmt.Fprintf(w, "%s\n", data)
+		flusher.Flush()
+		return
+	}
 	if compat == "think-tags" && thinkOpen && !thinkClosed {
 		writeMsg("</think>", false)
 	}

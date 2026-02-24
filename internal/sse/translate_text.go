@@ -38,11 +38,13 @@ func TranslateText(w http.ResponseWriter, body io.ReadCloser, model string, crea
 		flusher.Flush()
 	}
 
+	gotEvents := false
 	for {
 		evt, err := reader.Next()
 		if err != nil {
 			break
 		}
+		gotEvents = true
 
 		if resp, ok := evt.Data["response"].(map[string]any); ok {
 			if id, ok := resp["id"].(string); ok && id != "" {
@@ -80,10 +82,14 @@ func TranslateText(w http.ResponseWriter, body io.ReadCloser, model string, crea
 	}
 
 	// Stream ended without response.completed
-	writeChunk(types.TextCompletionChunk{
-		ID: responseID, Object: "text_completion.chunk", Created: created, Model: model,
-		Choices: []types.TextChunkChoice{{Index: 0, Text: "", FinishReason: types.StringPtr("stop")}},
-	})
+	if !gotEvents {
+		writeChunk(types.ErrorResponse{Error: types.ErrorDetail{Message: "upstream returned empty response"}})
+	} else {
+		writeChunk(types.TextCompletionChunk{
+			ID: responseID, Object: "text_completion.chunk", Created: created, Model: model,
+			Choices: []types.TextChunkChoice{{Index: 0, Text: "", FinishReason: types.StringPtr("stop")}},
+		})
+	}
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }

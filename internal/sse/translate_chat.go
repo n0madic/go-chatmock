@@ -428,6 +428,7 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 	}
 
 	reader := NewReader(body)
+	gotEvents := false
 
 	for {
 		if st.writeFailed {
@@ -437,6 +438,7 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 		if err != nil {
 			break
 		}
+		gotEvents = true
 
 		kind := evt.Type
 
@@ -540,6 +542,11 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 	}
 
 	// Stream ended without response.completed
+	if !gotEvents {
+		st.writeChunk(types.ErrorResponse{Error: types.ErrorDetail{Message: "upstream returned empty response"}})
+		st.writeDone()
+		return
+	}
 	if st.compat == "think-tags" && st.thinkOpen && !st.thinkClosed {
 		st.writeChunk(st.makeDelta(types.ChatDelta{Content: "</think>"}))
 	}

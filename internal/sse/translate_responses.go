@@ -18,11 +18,13 @@ func TranslateResponses(w http.ResponseWriter, body io.ReadCloser) {
 	}
 
 	reader := NewReader(body)
+	gotEvents := false
 	for {
 		evt, err := reader.Next()
 		if err != nil {
 			break
 		}
+		gotEvents = true
 
 		fmt.Fprintf(w, "data: %s\n\n", evt.Raw)
 		flusher.Flush()
@@ -34,6 +36,12 @@ func TranslateResponses(w http.ResponseWriter, body io.ReadCloser) {
 		}
 	}
 
+	if !gotEvents {
+		// Upstream returned HTTP 200 but sent no SSE events. Emit a
+		// response.failed so the client sees an actionable error.
+		fmt.Fprint(w, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"upstream returned empty response\"}}}\n\n")
+		flusher.Flush()
+	}
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }
