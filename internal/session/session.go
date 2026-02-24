@@ -21,6 +21,11 @@ var (
 
 // EnsureSessionID returns a deterministic session ID based on the instructions and input items.
 // If a client-supplied session ID is provided, it is used as-is.
+//
+// The deterministic ID enables prompt caching on the upstream: the same
+// instructions + first user message always produce the same session key,
+// so the ChatGPT backend can reuse cached computation across turns even
+// though we never send the previous_response_id in the upstream request.
 func EnsureSessionID(instructions string, inputItems []types.ResponsesInputItem, clientSupplied string) string {
 	if clientSupplied != "" {
 		return clientSupplied
@@ -40,6 +45,9 @@ func EnsureSessionID(instructions string, inputItems []types.ResponsesInputItem,
 	fingerprintMap[fp] = sid
 	order = append(order, fp)
 	if len(order) > maxEntries {
+		// Simple FIFO eviction: drop the oldest fingerprint when the cap is
+		// reached. O(n) copy is acceptable because eviction is rare and avoids
+		// an external LRU dependency for what is essentially a bounded table.
 		oldest := order[0]
 		copy(order, order[1:])
 		order[len(order)-1] = ""
@@ -49,6 +57,10 @@ func EnsureSessionID(instructions string, inputItems []types.ResponsesInputItem,
 	return sid
 }
 
+// canonicalizePrefix builds a stable string from only the session-invariant parts of
+// the request: instructions and the first user message. Subsequent turns in the
+// conversation must map to the same session ID so upstream prompt caching is effective.
+// Including later messages would produce a new session ID every turn, defeating caching.
 func canonicalizePrefix(instructions string, inputItems []types.ResponsesInputItem) string {
 	prefix := make(map[string]any)
 	if instructions != "" {

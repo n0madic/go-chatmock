@@ -19,6 +19,8 @@ import (
 	"github.com/n0madic/go-chatmock/internal/upstream"
 )
 
+// upstreamDoer abstracts the ChatGPT upstream client so the proxy handlers can
+// be tested with a mock without a real network connection.
 type upstreamDoer interface {
 	Do(context.Context, *upstream.Request) (*upstream.Response, error)
 }
@@ -95,9 +97,13 @@ func New(cfg *config.ServerConfig) *Server {
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	s.httpServer = &http.Server{
-		Addr:         addr,
-		Handler:      handler,
-		ReadTimeout:  30 * time.Second,
+		Addr:    addr,
+		Handler: handler,
+		// ReadTimeout covers only reading the request body; 30s is plenty for any JSON payload.
+		ReadTimeout: 30 * time.Second,
+		// WriteTimeout must be longer than the upstream SSE timeout (5 min) plus
+		// translation overhead. 600s gives a comfortable margin for long-running
+		// reasoning streams without hard-cutting clients mid-response.
 		WriteTimeout: 600 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
@@ -126,6 +132,9 @@ func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// corsMiddleware allows requests from any origin. This proxy is designed for
+// local use only; wildcard CORS is intentional so browser-based IDE extensions
+// (Cursor, VS Code web, etc.) can reach it without a per-origin allowlist.
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
@@ -168,6 +177,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		header := strings.TrimSpace(r.Header.Get("Authorization"))
 		token, ok := parseBearerAuthToken(header)
+		// ConstantTimeCompare prevents timing attacks that could leak the expected
+		// token length or prefix through response latency differences.
 		if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) != 1 {
 			s.writeAccessTokenAuthError(w, r)
 			return

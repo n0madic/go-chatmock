@@ -132,6 +132,9 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("ChatGPT-Account-ID", accountID)
+	// session_id is sent both in the payload as prompt_cache_key and here as a
+	// header. The header form is what the ChatGPT backend uses for routing and
+	// caching; the payload field may be required by older API versions.
 	httpReq.Header.Set("session_id", sessionID)
 
 	resp, err := httpClient.Do(httpReq)
@@ -218,6 +221,11 @@ func upstreamRequestID(headers http.Header) string {
 	)
 }
 
+// mergeIncludes combines client-requested includes with the reasoning content
+// include that is required for the summary stream events to arrive. The
+// reasoning include is only added when a reasoning parameter is active to avoid
+// bloating responses with encrypted reasoning tokens when the model is not in
+// reasoning mode (the encrypted payload cannot be decoded and is useless to us).
 func mergeIncludes(clientInclude []string, includeReasoning bool) []string {
 	var merged []string
 	seen := make(map[string]struct{})

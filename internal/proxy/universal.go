@@ -283,6 +283,13 @@ func (s *Server) normalizeUniversalRequest(body []byte, route universalRoute) (*
 	}, nil
 }
 
+// decodeUniversalBody decodes the request body into both ChatCompletionRequest
+// and ResponsesRequest simultaneously. The same body is decoded twice so that
+// normalizeUniversalRequest can accept either API format on any endpoint without
+// requiring separate routes per format.
+//
+// The CR/LF stripping fallback handles malformed payloads sent by some SDK
+// versions that embed literal newlines inside JSON strings.
 func decodeUniversalBody(body []byte) (map[string]any, types.ChatCompletionRequest, types.ResponsesRequest, error) {
 	decoded := body
 	var raw map[string]any
@@ -635,8 +642,10 @@ func composeInstructionsForRoute(
 		return instructions
 	default:
 		client := joinNonEmpty("\n\n", strings.TrimSpace(clientInstructions), strings.TrimSpace(inputSystemInstructions))
-		// Avoid mixing proxy Codex prompt with client-provided system instructions:
-		// IDE agents (e.g. Cursor) already send their own orchestration prompt.
+		// The proxy ships a built-in Codex system prompt, but IDE agents (e.g.
+		// Cursor) already include their own orchestration instructions. Mixing
+		// both would conflict and confuse the model, so we only use the built-in
+		// prompt when the client sends no instructions of its own.
 		if client != "" {
 			return client
 		}
@@ -671,6 +680,12 @@ func boolToInt(v bool) int {
 	return 0
 }
 
+// extractConversationID reads a stable conversation identifier from the request
+// payload. Multiple key names are checked because different clients use different
+// conventions: Cursor IDE sends "cursorConversationId" inside "metadata", while
+// other tools may use "conversation_id" or "conversationId" at the top level.
+// The conversation ID is not forwarded upstream; it is used only for our local
+// previous_response_id auto-linking.
 func extractConversationID(raw map[string]any) string {
 	if raw == nil {
 		return ""
@@ -695,6 +710,10 @@ type teeReadCloser struct {
 	closer io.Closer
 }
 
+// newTeeReadCloser wraps an SSE response body so that bytes are written to dst
+// while the body is being streamed to the client. This allows storeChatStreamState
+// to parse the completed SSE payload for state storage after streaming ends —
+// without buffering the entire body in memory before starting to stream.
 func newTeeReadCloser(src io.ReadCloser, dst io.Writer) io.ReadCloser {
 	return &teeReadCloser{
 		reader: io.TeeReader(src, dst),

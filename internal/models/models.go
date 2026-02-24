@@ -39,6 +39,12 @@ func ModelCatalog(exposeVariants bool) []string {
 	return ids
 }
 
+// modelMapping normalizes known aliases and shorthand names to the canonical
+// slug that the upstream accepts. This table needs to be updated whenever
+// OpenAI renames or aliases a model, or when new model families are added.
+// Entries pointing to the same canonical name (e.g. multiple codex variants)
+// reflect the upstream's own aliasing — the proxy follows the same convention
+// so that clients using any alias route to the correct backend endpoint.
 var modelMapping = map[string]string{
 	"gpt5":                 "gpt-5",
 	"gpt-5-latest":         "gpt-5",
@@ -93,6 +99,13 @@ func NormalizeModelName(name, debugModel string) string {
 }
 
 // AllowedEfforts returns the set of valid reasoning effort levels for a model.
+// Prefix matching is used instead of exact matching because model names may
+// arrive with version suffixes or user-supplied qualifiers from Ollama/Claude
+// clients that we have not normalized yet at this call site.
+//
+// The restricted sets per model reflect actual upstream support: gpt-5.1 does
+// not accept "minimal" or "xhigh", while gpt-5.2 drops "minimal". Sending an
+// unsupported effort level causes the upstream to return a 400 error.
 func AllowedEfforts(model string) map[string]bool {
 	base := strings.ToLower(strings.TrimSpace(model))
 	if base == "" {

@@ -74,6 +74,7 @@ func (s *Server) collectResponsesResponse(
 			if errorMsg == "" {
 				errorMsg = "response.failed"
 			}
+			// goto is the only way to break out of a switch inside a for loop.
 			goto done
 		case "response.completed":
 			goto done
@@ -229,6 +230,10 @@ func outputItemsToInputItems(items []types.ResponsesOutputItem) []types.Response
 func inputItemFromOutputItem(item types.ResponsesOutputItem) (types.ResponsesInputItem, bool) {
 	switch item.Type {
 	case "message":
+		// Cursor streams internal planning commentary as output messages with
+		// phase="commentary". These are not visible to the end user and must
+		// not be included in the stored conversation history, or they would be
+		// re-sent as assistant context on the next turn.
 		if strings.EqualFold(strings.TrimSpace(item.Phase), "commentary") {
 			return types.ResponsesInputItem{}, false
 		}
@@ -293,8 +298,12 @@ func cloneResponsesInputItems(items []types.ResponsesInputItem) []types.Response
 	return out
 }
 
-// moveResponsesSystemMessagesToInstructions rewrites system messages into
-// instructions (text-only cases) and keeps non-text system messages as user.
+// moveResponsesSystemMessagesToInstructions extracts text-only system messages
+// into the top-level instructions field. The Responses API does not accept a
+// "system" role in the input array, so system content must be moved to
+// instructions. Non-text system messages (e.g. those with image parts) cannot
+// be expressed as instructions and are demoted to "user" role as a best-effort
+// fallback.
 func moveResponsesSystemMessagesToInstructions(items []types.ResponsesInputItem) ([]types.ResponsesInputItem, string) {
 	if len(items) == 0 {
 		return nil, ""

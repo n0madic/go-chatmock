@@ -10,6 +10,12 @@ import (
 	"github.com/n0madic/go-chatmock/internal/types"
 )
 
+// restoreFunctionCallContext is a client-side polyfill for the Responses API
+// previous_response_id feature. Normally the upstream would handle continuity,
+// but we always send store=false (because store=true is rejected by the ChatGPT
+// backend), so the upstream never persists state between turns. Instead, we
+// store the conversation context locally and prepend it to each new request,
+// effectively reconstructing stateful multi-turn conversations ourselves.
 func (s *Server) restoreFunctionCallContext(inputItems []types.ResponsesInputItem, previousResponseID string, prependPreviousContext bool) ([]types.ResponsesInputItem, error) {
 	effectiveInput := cloneResponsesInputItems(inputItems)
 
@@ -98,6 +104,10 @@ func (s *Server) restoreFunctionCallContext(inputItems []types.ResponsesInputIte
 	return augmented, nil
 }
 
+// hasResponsesInputPrefix checks whether the stored previous context is already
+// present at the start of the incoming items. Some clients (e.g. Claude Code in
+// Responses mode) send the full conversation history on every turn, so we must
+// not prepend the stored context again or the model would see duplicated turns.
 func hasResponsesInputPrefix(items []types.ResponsesInputItem, prefix []types.ResponsesInputItem) bool {
 	if len(prefix) == 0 {
 		return true

@@ -48,9 +48,16 @@ type diskModelsCache struct {
 }
 
 // Registry fetches and caches the available model list from the upstream.
+//
+// Two mutexes are used intentionally:
+//   - mu (RWMutex) guards the cached data and allows concurrent readers.
+//   - fetchMu (Mutex) serializes network fetches so that when many requests
+//     arrive simultaneously on an empty cache, only one goroutine hits the
+//     upstream; the rest wait and then read the result already stored by the
+//     first goroutine.
 type Registry struct {
 	mu        sync.RWMutex
-	fetchMu   sync.Mutex // prevents concurrent initial fetches
+	fetchMu   sync.Mutex
 	tm        *auth.TokenManager
 	models    []RemoteModel
 	lastFetch time.Time
@@ -59,6 +66,11 @@ type Registry struct {
 
 // modelsCachePath is a function variable so tests can override where warm cache
 // is read from.
+//
+// The default path (~/.codex/models_cache.json) is shared with the official
+// Codex CLI. Reading it at startup means the registry is pre-populated on the
+// first request if the user has already run the CLI, avoiding a blocking
+// network fetch on the hot path.
 var modelsCachePath = func() string {
 	if d := os.Getenv("CODEX_HOME"); d != "" {
 		return filepath.Join(d, "models_cache.json")
@@ -291,6 +303,9 @@ func (r *Registry) loadFromDiskCache() (loaded bool, missing bool) {
 }
 
 // StaticFallback converts the static catalog to a []RemoteModel slice.
+// It is used when credentials are unavailable or the upstream is unreachable,
+// so the /v1/models endpoint and model validation still return useful results
+// without requiring a successful authentication flow.
 func StaticFallback() []RemoteModel {
 	var out []RemoteModel
 	for _, g := range AllModelGroups() {

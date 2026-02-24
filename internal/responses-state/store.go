@@ -9,7 +9,14 @@ import (
 )
 
 const (
-	DefaultTTL      = 60 * time.Minute
+	// DefaultTTL controls how long a response's context and function calls are
+	// retained. 60 minutes matches the typical access token lifetime; once the
+	// token expires and is refreshed, any in-progress conversation will also
+	// require a fresh context anyway.
+	DefaultTTL = 60 * time.Minute
+	// DefaultCapacity is a safety ceiling to prevent unbounded memory growth in
+	// long-running server instances. LRU eviction keeps the most recently used
+	// entries within this limit.
 	DefaultCapacity = 10000
 )
 
@@ -28,6 +35,11 @@ type entry struct {
 }
 
 // Store keeps per-response function_call state for local previous_response_id polyfill.
+// It exists because the upstream (ChatGPT backend) rejects store=true, so the
+// server-side conversation memory that previous_response_id depends on is never
+// created there. This store is the client-side substitute: after each response
+// we save the full conversation snapshot, and on the next request we prepend it
+// so the model sees a coherent multi-turn history.
 type Store struct {
 	mu       sync.Mutex
 	entries  map[string]*entry

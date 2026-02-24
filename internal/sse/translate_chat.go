@@ -351,17 +351,27 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 		return
 	}
 
+	// Three compat modes exist because different consumers interpret reasoning differently:
+	//   "think-tags"  — wraps reasoning in <think>…</think> tags inside the content
+	//                   field; consumed by Claude Code and compatible tools.
+	//   "o3"          — emits reasoning as a separate `reasoning` content block,
+	//                   matching the OpenAI o3 streaming format.
+	//   ""  (legacy)  — flat ReasoningSummary/Reasoning fields for older integrations.
 	compat := strings.ToLower(strings.TrimSpace(opts.ReasoningCompat))
 	if compat == "" {
 		compat = "think-tags"
 	}
 
 	st := &chatTranslatorState{
-		model:       model,
-		created:     created,
-		compat:      compat,
-		opts:        opts,
-		responseID:  "chatcmpl-stream",
+		model:   model,
+		created: created,
+		compat:  compat,
+		opts:    opts,
+		// Placeholder response ID before the first upstream event arrives.
+		// A stable value is used rather than a UUID so that clients that
+		// read the ID from an early chunk see the same value if they compare
+		// it with later chunks before response.created arrives.
+		responseID: "chatcmpl-stream",
 		wsState:     map[string]map[string]any{},
 		wsIndex:     map[string]int{},
 		wsNextIndex: 0,
@@ -381,6 +391,10 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 			return
 		}
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+			// Client disconnected mid-stream. We set writeFailed rather than
+			// returning immediately so the upstream body is fully drained;
+			// abandoning the read could leave the upstream connection in a
+			// broken state or prevent rate-limit headers from being recorded.
 			slog.Debug("client disconnected during SSE write", "error", err)
 			st.writeFailed = true
 			return

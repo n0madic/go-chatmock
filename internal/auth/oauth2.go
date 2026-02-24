@@ -11,6 +11,14 @@ import (
 )
 
 // NewOAuth2Config creates an oauth2.Config for the ChatGPT OAuth flow.
+//
+// Port 1455 and the /auth/callback path match the redirect URI registered in
+// OpenAI's OAuth application for the Codex CLI. Changing either value would
+// break the authorization code exchange because the authorization server
+// validates the redirect URI against the registered value.
+//
+// "offline_access" scope is requested to obtain a refresh token so the user
+// does not need to re-authenticate after every session.
 func NewOAuth2Config(clientID, issuer string) *oauth2.Config {
 	return &oauth2.Config{
 		ClientID: clientID,

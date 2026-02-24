@@ -37,6 +37,11 @@ func HomeDir() string {
 }
 
 // ReadAuthFile searches known locations for auth.json.
+// Locations are checked in priority order: environment variable overrides first
+// (to support CI/container deployments), then the default home directories.
+// The .codex path is included for compatibility with the official Codex CLI,
+// which writes auth.json there; users who have already logged in via the CLI
+// do not need to run `go-chatmock login` separately.
 func ReadAuthFile() (*AuthFile, error) {
 	home, _ := os.UserHomeDir()
 	candidates := []string{
@@ -78,6 +83,9 @@ func WriteAuthFile(af *AuthFile) error {
 }
 
 // DeriveAccountID extracts the ChatGPT account ID from an id_token's claims.
+// OpenAI embeds it in a non-standard nested claim path:
+// `https://api.openai.com/auth.chatgpt_account_id`. The unusual URL-like key
+// is an Auth0 convention for custom namespaced claims.
 func DeriveAccountID(idToken string) string {
 	if idToken == "" {
 		return ""
@@ -167,6 +175,12 @@ func (tm *TokenManager) GetEffectiveAuth() (accessToken, accountID string, err e
 }
 
 // shouldRefreshAccessToken checks if the access token needs refreshing.
+// Two strategies are tried in order:
+//  1. Parse the JWT `exp` claim for an exact expiry — preferred because it is
+//     robust against clock skew and tokens with non-standard lifetimes.
+//  2. Fall back to the persisted LastRefresh timestamp and a 55-minute window
+//     when the JWT cannot be decoded (e.g. opaque tokens). The 55-minute
+//     threshold gives a 5-minute buffer before the typical 60-minute expiry.
 func shouldRefreshAccessToken(accessToken, lastRefresh string) bool {
 	if accessToken == "" {
 		return true
