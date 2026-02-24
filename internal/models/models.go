@@ -2,6 +2,10 @@ package models
 
 import "strings"
 
+// DefaultModel is the canonical model name used when the client does not
+// specify one. Centralised here so all fallback paths reference a single value.
+const DefaultModel = "gpt-5"
+
 // ModelGroup represents a model and its allowed effort levels.
 type ModelGroup struct {
 	Base    string
@@ -75,7 +79,7 @@ func NormalizeModelName(name, debugModel string) string {
 		return strings.TrimSpace(debugModel)
 	}
 	if name == "" {
-		return "gpt-5"
+		return DefaultModel
 	}
 	base := strings.TrimSpace(strings.SplitN(name, ":", 2)[0])
 

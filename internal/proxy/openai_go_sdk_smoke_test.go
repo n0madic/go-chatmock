@@ -16,7 +16,7 @@ import (
 func newSDKSmokeHTTPServer(t *testing.T, up *queuedUpstreamClient) *httptest.Server {
 	t.Helper()
 
-	s := newCompatTestServer(up)
+	s := newCompatTestServerT(t, up)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("POST /v1/responses", s.handleResponses)

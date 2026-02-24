@@ -210,6 +210,37 @@ data: {"type":"response.completed","response":{"id":"resp_reasoning_commentary_t
 	}
 }
 
+func TestTranslateChatToolArgBufSizeLimit(t *testing.T) {
+	// Build a stream whose cumulative deltas exceed maxToolArgBufSize.
+	// The translator should stop buffering once the limit is hit.
+	var b strings.Builder
+	b.WriteString(`data: {"type":"response.created","response":{"id":"resp_overflow"}}` + "\n\n")
+	b.WriteString(`data: {"type":"response.output_item.added","item":{"type":"function_call","id":"item_big","call_id":"call_big","name":"BigTool","arguments":"{}"}}` + "\n\n")
+
+	// Each delta chunk is ~10KB; we need >1MB total to exceed the limit.
+	chunk := strings.Repeat("x", 10000)
+	chunkJSON, _ := json.Marshal(chunk)
+	for i := 0; i < 120; i++ {
+		fmt.Fprintf(&b, "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_big\",\"delta\":%s}\n\n", chunkJSON)
+	}
+
+	b.WriteString(`data: {"type":"response.output_item.done","item":{"type":"function_call","id":"item_big","call_id":"call_big","name":"BigTool","arguments":"{\"fallback\":\"ok\"}"}}` + "\n\n")
+	b.WriteString(`data: {"type":"response.completed","response":{"id":"resp_overflow"}}` + "\n\n")
+
+	w := newFlusherRecorder()
+	TranslateChat(w, io.NopCloser(strings.NewReader(b.String())), "gpt-5", time.Now().Unix(), TranslateChatOptions{})
+
+	out := w.Body.String()
+	if !strings.Contains(out, `"name":"BigTool"`) {
+		t.Fatalf("expected BigTool in output, got: %s", out)
+	}
+	// The done event provides fallback arguments, so output should use those
+	// rather than the truncated buffer.
+	if !strings.Contains(out, `"arguments":"{\"fallback\":\"ok\"}"`) {
+		t.Fatalf("expected fallback arguments from done event, got: %s", out)
+	}
+}
+
 func splitBySize(s string, size int) []string {
 	if size <= 0 || len(s) <= size {
 		return []string{s}

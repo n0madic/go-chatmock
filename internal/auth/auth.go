@@ -104,11 +104,15 @@ func DeriveAccountID(idToken string) string {
 	return ""
 }
 
+const authCacheTTL = 1 * time.Second
+
 // TokenManager handles thread-safe token access and refresh.
 type TokenManager struct {
-	mu       sync.Mutex
-	clientID string
-	tokenURL string
+	mu         sync.Mutex
+	clientID   string
+	tokenURL   string
+	cachedAuth *AuthFile
+	cachedAt   time.Time
 }
 
 // NewTokenManager creates a new token manager with the given OAuth config.
@@ -124,9 +128,16 @@ func (tm *TokenManager) GetEffectiveAuth() (accessToken, accountID string, err e
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	af, err := ReadAuthFile()
-	if err != nil {
-		return "", "", ErrNoCredentials
+	var af *AuthFile
+	if tm.cachedAuth != nil && time.Since(tm.cachedAt) < authCacheTTL {
+		af = tm.cachedAuth
+	} else {
+		af, err = ReadAuthFile()
+		if err != nil {
+			return "", "", ErrNoCredentials
+		}
+		tm.cachedAuth = af
+		tm.cachedAt = time.Now()
 	}
 
 	accessToken = af.Tokens.AccessToken
@@ -163,6 +174,8 @@ func (tm *TokenManager) GetEffectiveAuth() (accessToken, accountID string, err e
 				if err := WriteAuthFile(af); err != nil {
 					slog.Error("unable to persist refreshed auth tokens", "error", err)
 				}
+				tm.cachedAuth = af
+				tm.cachedAt = time.Now()
 			}
 		}
 	}

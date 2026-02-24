@@ -121,6 +121,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.cancelBg != nil {
 		s.cancelBg()
 	}
+	if s.responsesState != nil {
+		s.responsesState.Close()
+	}
 	return s.httpServer.Shutdown(ctx)
 }
 

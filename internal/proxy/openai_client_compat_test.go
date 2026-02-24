@@ -89,14 +89,25 @@ func cloneUpstreamRequest(in *upstream.Request) *upstream.Request {
 	return &out
 }
 
-func newCompatTestServer(client *queuedUpstreamClient) *Server {
-	return &Server{
+func newCompatTestServer(client *queuedUpstreamClient, cleanup ...func()) *Server {
+	store := responsesstate.NewStore(5*time.Minute, 100)
+	if len(cleanup) > 0 && cleanup[0] != nil {
+		// Caller can pass a t.Cleanup for deferred store close.
+	}
+	s := &Server{
 		Config: &config.ServerConfig{
 			DebugModel: "gpt-5",
 		},
 		upstreamClient: client,
-		responsesState: responsesstate.NewStore(5*time.Minute, 100),
+		responsesState: store,
 	}
+	return s
+}
+
+func newCompatTestServerT(t *testing.T, client *queuedUpstreamClient) *Server {
+	s := newCompatTestServer(client)
+	t.Cleanup(func() { s.responsesState.Close() })
+	return s
 }
 
 func TestOpenAIClientCompatChatCompletionsNonStream(t *testing.T) {
@@ -112,7 +123,7 @@ data: {"type":"response.completed","response":{"id":"resp_chat_1","usage":{"inpu
 			},
 		},
 	}
-	s := newCompatTestServer(up)
+	s := newCompatTestServerT(t, up)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
 		"model":"gpt-5",
@@ -171,7 +182,7 @@ data: {"type":"response.completed","response":{"id":"resp_chat_input"}}
 			},
 		},
 	}
-	s := newCompatTestServer(up)
+	s := newCompatTestServerT(t, up)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
 		"model":"gpt-5",
@@ -215,7 +226,7 @@ data: {"type":"response.completed","response":{"id":"resp_chat_tools"}}
 			},
 		},
 	}
-	s := newCompatTestServer(up)
+	s := newCompatTestServerT(t, up)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
 		"model":"gpt-5",
@@ -286,7 +297,7 @@ data: {"type":"response.completed","response":{"id":"resp_chat_loop"}}
 			},
 		},
 	}
-	s := newCompatTestServer(up)
+	s := newCompatTestServerT(t, up)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
 		"model":"gpt-5",
@@ -345,7 +356,7 @@ data: {"type":"response.completed","response":{"id":"resp_1","created_at":173000
 			},
 		},
 	}
-	s := newCompatTestServer(up)
+	s := newCompatTestServerT(t, up)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 		"model":"gpt-5",
@@ -398,7 +409,7 @@ data: {"type":"response.completed","response":{"id":"resp_stream_1"}}
 			},
 		},
 	}
-	s := newCompatTestServer(up)
+	s := newCompatTestServerT(t, up)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 		"model":"gpt-5",
@@ -438,7 +449,7 @@ data: {"type":"response.completed","response":{"id":"resp_tool_stream"}}
 			},
 		},
 	}
-	s := newCompatTestServer(up)
+	s := newCompatTestServerT(t, up)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
 		"model":"gpt-5",
@@ -492,7 +503,7 @@ data: {"type":"response.completed","response":{"id":"resp_loop_2"}}
 			},
 		},
 	}
-	s := newCompatTestServer(up)
+	s := newCompatTestServerT(t, up)
 
 	req1 := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
 		"model":"gpt-5",
@@ -559,7 +570,7 @@ data: {"type":"response.completed","response":{"id":"resp_cursor_2"}}
 			},
 		},
 	}
-	s := newCompatTestServer(up)
+	s := newCompatTestServerT(t, up)
 	const convID = "cursor-conv-meta-1"
 
 	req1 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
@@ -647,7 +658,7 @@ data: {"type":"response.completed","response":{"id":"resp_cursor_latest_3"}}
 			},
 		},
 	}
-	s := newCompatTestServer(up)
+	s := newCompatTestServerT(t, up)
 	const convID = "cursor-conv-top-level-1"
 
 	req1 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{

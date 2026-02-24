@@ -10,6 +10,7 @@ import (
 
 func TestStorePutGet(t *testing.T) {
 	s := NewStore(5*time.Minute, 10)
+	defer s.Close()
 	s.Put("resp_1", []FunctionCall{
 		{CallID: "call_b", Name: "write_file", Arguments: `{"path":"x"}`},
 		{CallID: "call_a", Name: "read_file", Arguments: `{"path":"y"}`},
@@ -29,6 +30,7 @@ func TestStorePutGet(t *testing.T) {
 
 func TestStorePutGetContext(t *testing.T) {
 	s := NewStore(5*time.Minute, 10)
+	defer s.Close()
 	s.PutContext("resp_1", []types.ResponsesInputItem{
 		{
 			Type:    "message",
@@ -48,6 +50,7 @@ func TestStorePutGetContext(t *testing.T) {
 
 func TestStorePutSnapshotStoresBothCallsAndContext(t *testing.T) {
 	s := NewStore(5*time.Minute, 10)
+	defer s.Close()
 	s.PutSnapshot(
 		"resp_1",
 		[]types.ResponsesInputItem{
@@ -68,6 +71,7 @@ func TestStorePutSnapshotStoresBothCallsAndContext(t *testing.T) {
 
 func TestStorePutGetInstructions(t *testing.T) {
 	s := NewStore(5*time.Minute, 10)
+	defer s.Close()
 	s.PutInstructions("resp_1", "You are strict")
 
 	got, ok := s.GetInstructions("resp_1")
@@ -84,8 +88,16 @@ func TestStorePutGetInstructions(t *testing.T) {
 
 func TestStoreExpiry(t *testing.T) {
 	s := NewStore(25*time.Millisecond, 10)
+	defer s.Close()
 	s.Put("resp_1", []FunctionCall{{CallID: "call_1", Name: "read_file"}})
+
+	// Wait long enough for the background cleanup to run (cleanupTick = 30s in
+	// production, but here TTL is 25ms). We trigger cleanup manually to avoid
+	// waiting for the ticker in tests.
 	time.Sleep(40 * time.Millisecond)
+	s.mu.Lock()
+	s.cleanupExpiredLocked(time.Now())
+	s.mu.Unlock()
 
 	if _, ok := s.Get("resp_1"); ok {
 		t.Fatal("expected entry to expire")
@@ -94,6 +106,7 @@ func TestStoreExpiry(t *testing.T) {
 
 func TestStoreCapacityEvictionByLeastRecentAccess(t *testing.T) {
 	s := NewStore(5*time.Minute, 2)
+	defer s.Close()
 	s.Put("resp_1", []FunctionCall{{CallID: "call_1", Name: "read_file"}})
 	time.Sleep(5 * time.Millisecond)
 	s.Put("resp_2", []FunctionCall{{CallID: "call_2", Name: "write_file"}})
@@ -119,6 +132,7 @@ func TestStoreCapacityEvictionByLeastRecentAccess(t *testing.T) {
 
 func TestStoreGetReturnsCopy(t *testing.T) {
 	s := NewStore(5*time.Minute, 10)
+	defer s.Close()
 	s.Put("resp_1", []FunctionCall{{CallID: "call_1", Name: "read_file"}})
 
 	got, ok := s.Get("resp_1")
@@ -138,6 +152,7 @@ func TestStoreGetReturnsCopy(t *testing.T) {
 
 func TestStoreGetContextReturnsCopy(t *testing.T) {
 	s := NewStore(5*time.Minute, 10)
+	defer s.Close()
 	s.PutContext("resp_1", []types.ResponsesInputItem{
 		{
 			Type:    "message",
@@ -163,6 +178,7 @@ func TestStoreGetContextReturnsCopy(t *testing.T) {
 
 func TestStoreConcurrentAccess(t *testing.T) {
 	s := NewStore(5*time.Minute, 1000)
+	defer s.Close()
 	var wg sync.WaitGroup
 
 	for i := range 100 {
@@ -183,6 +199,7 @@ func TestStoreConcurrentAccess(t *testing.T) {
 
 func TestStorePutGetConversationLatest(t *testing.T) {
 	s := NewStore(5*time.Minute, 10)
+	defer s.Close()
 	s.PutConversationLatest("conv_1", "resp_1")
 
 	got, ok := s.GetConversationLatest("conv_1")
@@ -202,10 +219,64 @@ func TestStorePutGetConversationLatest(t *testing.T) {
 
 func TestStoreConversationLatestExpiry(t *testing.T) {
 	s := NewStore(25*time.Millisecond, 10)
+	defer s.Close()
 	s.PutConversationLatest("conv_1", "resp_1")
 	time.Sleep(40 * time.Millisecond)
 
+	s.mu.Lock()
+	s.cleanupExpiredLocked(time.Now())
+	s.mu.Unlock()
+
 	if _, ok := s.GetConversationLatest("conv_1"); ok {
 		t.Fatal("expected conversation mapping to expire")
+	}
+}
+
+func TestStoreMixedEvictionEntriesAndConversations(t *testing.T) {
+	s := NewStore(5*time.Minute, 3)
+	defer s.Close()
+
+	s.Put("resp_1", []FunctionCall{{CallID: "call_1", Name: "fn1"}})
+	time.Sleep(2 * time.Millisecond)
+	s.PutConversationLatest("conv_1", "resp_1")
+	time.Sleep(2 * time.Millisecond)
+	s.Put("resp_2", []FunctionCall{{CallID: "call_2", Name: "fn2"}})
+	time.Sleep(2 * time.Millisecond)
+
+	// Capacity is 3: entries=[resp_1, resp_2] + conv=[conv_1] = 3, at capacity.
+	// Adding one more should evict the LRU item (resp_1, added first).
+	s.PutConversationLatest("conv_2", "resp_2")
+
+	// resp_1 was the oldest and should be evicted.
+	if _, ok := s.Get("resp_1"); ok {
+		t.Fatal("expected resp_1 to be evicted")
+	}
+	if _, ok := s.GetConversationLatest("conv_1"); !ok {
+		t.Fatal("expected conv_1 to remain")
+	}
+	if _, ok := s.Get("resp_2"); !ok {
+		t.Fatal("expected resp_2 to remain")
+	}
+	if _, ok := s.GetConversationLatest("conv_2"); !ok {
+		t.Fatal("expected conv_2 to remain")
+	}
+}
+
+func TestStoreCloseStopsGoroutine(t *testing.T) {
+	s := NewStore(5*time.Minute, 10)
+	s.Put("resp_1", []FunctionCall{{CallID: "call_1", Name: "fn"}})
+
+	// Close should return without hanging.
+	done := make(chan struct{})
+	go func() {
+		s.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// ok
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close() did not return in time — goroutine may be stuck")
 	}
 }

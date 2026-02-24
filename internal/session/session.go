@@ -1,6 +1,7 @@
 package session
 
 import (
+	"container/list"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,11 +14,29 @@ import (
 
 const maxEntries = 10000
 
-var (
+// SessionStore holds the fingerprint→sessionID cache with FIFO eviction.
+type SessionStore struct {
 	mu             sync.Mutex
-	fingerprintMap = make(map[string]string)
-	order          []string
-)
+	fingerprintMap map[string]string
+	lru            *list.List
+	lruIndex       map[string]*list.Element
+}
+
+// NewSessionStore creates a new session store.
+func NewSessionStore() *SessionStore {
+	return &SessionStore{
+		fingerprintMap: make(map[string]string),
+		lru:            list.New(),
+		lruIndex:       make(map[string]*list.Element),
+	}
+}
+
+// Len returns the number of cached entries (for tests).
+func (ss *SessionStore) Len() int {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	return len(ss.fingerprintMap)
+}
 
 // EnsureSessionID returns a deterministic session ID based on the instructions and input items.
 // If a client-supplied session ID is provided, it is used as-is.
@@ -26,7 +45,7 @@ var (
 // instructions + first user message always produce the same session key,
 // so the ChatGPT backend can reuse cached computation across turns even
 // though we never send the previous_response_id in the upstream request.
-func EnsureSessionID(instructions string, inputItems []types.ResponsesInputItem, clientSupplied string) string {
+func (ss *SessionStore) EnsureSessionID(instructions string, inputItems []types.ResponsesInputItem, clientSupplied string) string {
 	if clientSupplied != "" {
 		return clientSupplied
 	}
@@ -34,27 +53,35 @@ func EnsureSessionID(instructions string, inputItems []types.ResponsesInputItem,
 	canon := canonicalizePrefix(instructions, inputItems)
 	fp := fingerprint(canon)
 
-	mu.Lock()
-	defer mu.Unlock()
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
 
-	if sid, ok := fingerprintMap[fp]; ok {
+	if sid, ok := ss.fingerprintMap[fp]; ok {
 		return sid
 	}
 
 	sid := uuid.New().String()
-	fingerprintMap[fp] = sid
-	order = append(order, fp)
-	if len(order) > maxEntries {
-		// Simple FIFO eviction: drop the oldest fingerprint when the cap is
-		// reached. O(n) copy is acceptable because eviction is rare and avoids
-		// an external LRU dependency for what is essentially a bounded table.
-		oldest := order[0]
-		copy(order, order[1:])
-		order[len(order)-1] = ""
-		order = order[:len(order)-1]
-		delete(fingerprintMap, oldest)
+	ss.fingerprintMap[fp] = sid
+	elem := ss.lru.PushFront(fp)
+	ss.lruIndex[fp] = elem
+
+	if ss.lru.Len() > maxEntries {
+		back := ss.lru.Back()
+		if back != nil {
+			oldest := back.Value.(string)
+			ss.lru.Remove(back)
+			delete(ss.lruIndex, oldest)
+			delete(ss.fingerprintMap, oldest)
+		}
 	}
 	return sid
+}
+
+var defaultStore = NewSessionStore()
+
+// EnsureSessionID is a package-level convenience that delegates to the default store.
+func EnsureSessionID(instructions string, inputItems []types.ResponsesInputItem, clientSupplied string) string {
+	return defaultStore.EnsureSessionID(instructions, inputItems, clientSupplied)
 }
 
 // canonicalizePrefix builds a stable string from only the session-invariant parts of

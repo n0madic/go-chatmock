@@ -78,7 +78,34 @@ type ResponsesInputItem struct {
 	Name      string             `json:"name,omitempty"`
 	Arguments string             `json:"arguments,omitempty"`
 	CallID    string             `json:"call_id,omitempty"`
-	Output    string             `json:"output,omitempty"`
+	Output    string             `json:"-"`
+}
+
+// MarshalJSON implements custom JSON marshaling for ResponsesInputItem.
+// It always includes "output" for function_call_output items (even if empty),
+// and omits it for all other item types.
+func (item ResponsesInputItem) MarshalJSON() ([]byte, error) {
+	type marshalItem struct {
+		Type      string             `json:"type"`
+		Role      string             `json:"role,omitempty"`
+		Content   []ResponsesContent `json:"content,omitempty"`
+		Name      string             `json:"name,omitempty"`
+		Arguments string             `json:"arguments,omitempty"`
+		CallID    string             `json:"call_id,omitempty"`
+		Output    *string            `json:"output,omitempty"`
+	}
+	m := marshalItem{
+		Type:      item.Type,
+		Role:      item.Role,
+		Content:   item.Content,
+		Name:      item.Name,
+		Arguments: item.Arguments,
+		CallID:    item.CallID,
+	}
+	if item.Type == "function_call_output" || item.Output != "" {
+		m.Output = &item.Output
+	}
+	return json.Marshal(m)
 }
 
 // Alias is an internal struct used for custom unmarshaling of ResponsesInputItem.

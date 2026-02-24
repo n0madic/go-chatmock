@@ -16,6 +16,7 @@ import (
 
 func TestStreamResponsesWithStateCapturesToolCalls(t *testing.T) {
 	s := &Server{responsesState: responsesstate.NewStore(5*time.Minute, 100)}
+	defer s.responsesState.Close()
 
 	stream := `data: {"type":"response.created","response":{"id":"resp_123"}}
 
@@ -65,6 +66,7 @@ data: {"type":"response.completed","response":{"id":"resp_123"}}
 
 func TestCollectResponsesResponseCapturesToolCalls(t *testing.T) {
 	s := &Server{responsesState: responsesstate.NewStore(5*time.Minute, 100)}
+	defer s.responsesState.Close()
 
 	stream := `data: {"type":"response.created","response":{"id":"resp_456","created_at":1730000000}}
 
@@ -119,6 +121,7 @@ data: {"type":"response.completed","response":{"id":"resp_456","created_at":1730
 
 func TestCollectResponsesResponseMergesUsageFromCompletedEvent(t *testing.T) {
 	s := &Server{responsesState: responsesstate.NewStore(5*time.Minute, 100)}
+	defer s.responsesState.Close()
 
 	stream := `data: {"type":"response.created","response":{"id":"resp_usage","created_at":1730000000,"usage":{"input_tokens":4}}}
 

@@ -1,6 +1,7 @@
 package responsesstate
 
 import (
+	"container/list"
 	"sort"
 	"sync"
 	"time"
@@ -18,6 +19,8 @@ const (
 	// long-running server instances. LRU eviction keeps the most recently used
 	// entries within this limit.
 	DefaultCapacity = 10000
+	// cleanupTick is the interval between background expired-entry sweeps.
+	cleanupTick = 30 * time.Second
 )
 
 // FunctionCall stores a function_call item so it can be replayed in a future request.
@@ -27,11 +30,24 @@ type FunctionCall struct {
 	Arguments string
 }
 
+// lruKey identifies either an entry or a conversation link in the LRU list.
+type lruKey struct {
+	id     string
+	isConv bool
+}
+
 type entry struct {
 	calls        map[string]FunctionCall
 	context      []types.ResponsesInputItem
 	instructions string
 	lastAccess   time.Time
+	listElem     *list.Element
+}
+
+type conversationLink struct {
+	responseID string
+	lastAccess time.Time
+	listElem   *list.Element
 }
 
 // Store keeps per-response function_call state for local previous_response_id polyfill.
@@ -43,17 +59,16 @@ type entry struct {
 type Store struct {
 	mu       sync.Mutex
 	entries  map[string]*entry
-	conv     map[string]conversationLink
+	conv     map[string]*conversationLink
+	lru      *list.List
 	ttl      time.Duration
 	capacity int
-}
-
-type conversationLink struct {
-	responseID string
-	lastAccess time.Time
+	stopCh   chan struct{}
+	done     chan struct{}
 }
 
 // NewStore creates an in-memory state store with TTL and capacity limits.
+// The caller must call Close to stop the background cleanup goroutine.
 func NewStore(ttl time.Duration, capacity int) *Store {
 	if ttl <= 0 {
 		ttl = DefaultTTL
@@ -61,11 +76,39 @@ func NewStore(ttl time.Duration, capacity int) *Store {
 	if capacity <= 0 {
 		capacity = DefaultCapacity
 	}
-	return &Store{
+	s := &Store{
 		entries:  make(map[string]*entry),
-		conv:     make(map[string]conversationLink),
+		conv:     make(map[string]*conversationLink),
+		lru:      list.New(),
 		ttl:      ttl,
 		capacity: capacity,
+		stopCh:   make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+	go s.cleanupLoop()
+	return s
+}
+
+// Close stops the background cleanup goroutine and waits for it to finish.
+func (s *Store) Close() {
+	close(s.stopCh)
+	<-s.done
+}
+
+func (s *Store) cleanupLoop() {
+	defer close(s.done)
+	ticker := time.NewTicker(cleanupTick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			s.mu.Lock()
+			s.cleanupExpiredLocked(now)
+			s.mu.Unlock()
+		case <-s.stopCh:
+			return
+		}
 	}
 }
 
@@ -85,7 +128,6 @@ func (s *Store) Put(responseID string, calls []FunctionCall) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cleanupExpiredLocked(now)
 	s.putCallsLocked(responseID, callMap, now)
 	s.evictIfNeededLocked()
 }
@@ -102,7 +144,6 @@ func (s *Store) PutContext(responseID string, context []types.ResponsesInputItem
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cleanupExpiredLocked(now)
 	s.putContextLocked(responseID, ctxCopy, now)
 	s.evictIfNeededLocked()
 }
@@ -125,7 +166,6 @@ func (s *Store) PutSnapshot(responseID string, context []types.ResponsesInputIte
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cleanupExpiredLocked(now)
 	if len(ctxCopy) > 0 {
 		s.putContextLocked(responseID, ctxCopy, now)
 	}
@@ -146,7 +186,6 @@ func (s *Store) PutInstructions(responseID string, instructions string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cleanupExpiredLocked(now)
 	e, ok := s.entries[responseID]
 	if !ok {
 		e = &entry{}
@@ -154,6 +193,7 @@ func (s *Store) PutInstructions(responseID string, instructions string) {
 	}
 	e.instructions = instructions
 	e.lastAccess = now
+	s.touchLRU(responseID, false, e)
 	s.evictIfNeededLocked()
 }
 
@@ -168,13 +208,12 @@ func (s *Store) Get(responseID string) ([]FunctionCall, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cleanupExpiredLocked(now)
-
 	e, ok := s.entries[responseID]
 	if !ok {
 		return nil, false
 	}
 	e.lastAccess = now
+	s.touchLRU(responseID, false, e)
 
 	keys := make([]string, 0, len(e.calls))
 	for id := range e.calls {
@@ -206,13 +245,12 @@ func (s *Store) GetContext(responseID string) ([]types.ResponsesInputItem, bool)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cleanupExpiredLocked(now)
-
 	e, ok := s.entries[responseID]
 	if !ok {
 		return nil, false
 	}
 	e.lastAccess = now
+	s.touchLRU(responseID, false, e)
 
 	return cloneInputItems(e.context), true
 }
@@ -228,13 +266,12 @@ func (s *Store) GetInstructions(responseID string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cleanupExpiredLocked(now)
-
 	e, ok := s.entries[responseID]
 	if !ok {
 		return "", false
 	}
 	e.lastAccess = now
+	s.touchLRU(responseID, false, e)
 
 	return e.instructions, true
 }
@@ -250,9 +287,9 @@ func (s *Store) Exists(responseID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cleanupExpiredLocked(now)
 	if e, ok := s.entries[responseID]; ok {
 		e.lastAccess = now
+		s.touchLRU(responseID, false, e)
 		return true
 	}
 	return false
@@ -268,11 +305,14 @@ func (s *Store) PutConversationLatest(conversationID, responseID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cleanupExpiredLocked(now)
-	s.conv[conversationID] = conversationLink{
-		responseID: responseID,
-		lastAccess: now,
+	link, ok := s.conv[conversationID]
+	if !ok {
+		link = &conversationLink{}
+		s.conv[conversationID] = link
 	}
+	link.responseID = responseID
+	link.lastAccess = now
+	s.touchConvLRU(conversationID, link)
 	s.evictIfNeededLocked()
 }
 
@@ -286,13 +326,12 @@ func (s *Store) GetConversationLatest(conversationID string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cleanupExpiredLocked(now)
 	link, ok := s.conv[conversationID]
 	if !ok || link.responseID == "" {
 		return "", false
 	}
 	link.lastAccess = now
-	s.conv[conversationID] = link
+	s.touchConvLRU(conversationID, link)
 	return link.responseID, true
 }
 
@@ -326,6 +365,7 @@ func (s *Store) putCallsLocked(responseID string, callMap map[string]FunctionCal
 	}
 	e.calls = callMap
 	e.lastAccess = now
+	s.touchLRU(responseID, false, e)
 }
 
 func (s *Store) putContextLocked(responseID string, ctxCopy []types.ResponsesInputItem, now time.Time) {
@@ -336,16 +376,41 @@ func (s *Store) putContextLocked(responseID string, ctxCopy []types.ResponsesInp
 	}
 	e.context = ctxCopy
 	e.lastAccess = now
+	s.touchLRU(responseID, false, e)
+}
+
+// touchLRU moves or inserts an entry's element to the front of the LRU list.
+func (s *Store) touchLRU(id string, isConv bool, e *entry) {
+	if e.listElem != nil {
+		s.lru.MoveToFront(e.listElem)
+	} else {
+		e.listElem = s.lru.PushFront(lruKey{id: id, isConv: isConv})
+	}
+}
+
+// touchConvLRU moves or inserts a conversation link's element to the front.
+func (s *Store) touchConvLRU(id string, link *conversationLink) {
+	if link.listElem != nil {
+		s.lru.MoveToFront(link.listElem)
+	} else {
+		link.listElem = s.lru.PushFront(lruKey{id: id, isConv: true})
+	}
 }
 
 func (s *Store) cleanupExpiredLocked(now time.Time) {
 	for responseID, e := range s.entries {
 		if now.Sub(e.lastAccess) > s.ttl {
+			if e.listElem != nil {
+				s.lru.Remove(e.listElem)
+			}
 			delete(s.entries, responseID)
 		}
 	}
 	for conversationID, c := range s.conv {
 		if now.Sub(c.lastAccess) > s.ttl {
+			if c.listElem != nil {
+				s.lru.Remove(c.listElem)
+			}
 			delete(s.conv, conversationID)
 		}
 	}
@@ -353,33 +418,22 @@ func (s *Store) cleanupExpiredLocked(now time.Time) {
 
 func (s *Store) evictIfNeededLocked() {
 	for len(s.entries)+len(s.conv) > s.capacity {
-		var oldestID string
-		var oldestAt time.Time
-		oldestIsConv := false
-		first := true
-		for responseID, e := range s.entries {
-			if first || e.lastAccess.Before(oldestAt) {
-				oldestID = responseID
-				oldestAt = e.lastAccess
-				oldestIsConv = false
-				first = false
-			}
-		}
-		for conversationID, c := range s.conv {
-			if first || c.lastAccess.Before(oldestAt) {
-				oldestID = conversationID
-				oldestAt = c.lastAccess
-				oldestIsConv = true
-				first = false
-			}
-		}
-		if oldestID == "" {
+		back := s.lru.Back()
+		if back == nil {
 			return
 		}
-		if oldestIsConv {
-			delete(s.conv, oldestID)
+		key := back.Value.(lruKey)
+		s.lru.Remove(back)
+		if key.isConv {
+			if link, ok := s.conv[key.id]; ok {
+				link.listElem = nil
+				delete(s.conv, key.id)
+			}
 		} else {
-			delete(s.entries, oldestID)
+			if e, ok := s.entries[key.id]; ok {
+				e.listElem = nil
+				delete(s.entries, key.id)
+			}
 		}
 	}
 }

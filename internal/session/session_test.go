@@ -9,10 +9,7 @@ import (
 
 // resetCache clears the in-memory LRU cache. Call from test code only.
 func resetCache() {
-	mu.Lock()
-	defer mu.Unlock()
-	fingerprintMap = make(map[string]string)
-	order = nil
+	defaultStore = NewSessionStore()
 }
 
 // TestClientSuppliedSessionIDPassthrough verifies that a non-empty clientSupplied
@@ -81,9 +78,7 @@ func TestLRUEvictionAtMaxEntries(t *testing.T) {
 		EnsureSessionID(fmt.Sprintf("instr-%d", i), nil, "")
 	}
 
-	mu.Lock()
-	sizeBefore := len(fingerprintMap)
-	mu.Unlock()
+	sizeBefore := defaultStore.Len()
 
 	if sizeBefore != maxEntries {
 		t.Fatalf("expected cache size %d before overflow, got %d", maxEntries, sizeBefore)
@@ -92,9 +87,7 @@ func TestLRUEvictionAtMaxEntries(t *testing.T) {
 	// Adding one more entry should evict the oldest (instr-0).
 	EnsureSessionID("instr-overflow", nil, "")
 
-	mu.Lock()
-	sizeAfter := len(fingerprintMap)
-	mu.Unlock()
+	sizeAfter := defaultStore.Len()
 
 	if sizeAfter != maxEntries {
 		t.Errorf("expected cache size %d after eviction, got %d", maxEntries, sizeAfter)
@@ -115,9 +108,7 @@ func TestCacheGrowsOnNewEntries(t *testing.T) {
 		EnsureSessionID(fmt.Sprintf("unique-%d", i), nil, "")
 	}
 
-	mu.Lock()
-	size := len(fingerprintMap)
-	mu.Unlock()
+	size := defaultStore.Len()
 
 	if size != 5 {
 		t.Errorf("expected cache size 5, got %d", size)
@@ -140,5 +131,23 @@ func TestEmptyInstructionsAndInput(t *testing.T) {
 	id2 := EnsureSessionID("", nil, "")
 	if id1 != id2 {
 		t.Errorf("empty inputs should yield the same ID; got %q and %q", id1, id2)
+	}
+}
+
+// TestSessionStoreIndependentInstances verifies that separate SessionStore instances
+// have independent caches.
+func TestSessionStoreIndependentInstances(t *testing.T) {
+	s1 := NewSessionStore()
+	s2 := NewSessionStore()
+
+	id1 := s1.EnsureSessionID("sys", nil, "")
+	id2 := s2.EnsureSessionID("sys", nil, "")
+
+	// Both should return IDs but they are independent (different UUIDs).
+	if id1 == "" || id2 == "" {
+		t.Error("expected non-empty IDs from both stores")
+	}
+	if id1 == id2 {
+		t.Error("independent stores should produce different UUIDs")
 	}
 }

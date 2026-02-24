@@ -231,6 +231,7 @@ func (r *Registry) doFetch() error {
 		r.mu.Lock()
 		r.lastFetch = time.Now()
 		r.mu.Unlock()
+		r.saveToDiskCache()
 		return nil
 	}
 
@@ -258,7 +259,39 @@ func (r *Registry) doFetch() error {
 	}
 	r.mu.Unlock()
 
+	r.saveToDiskCache()
+
 	return nil
+}
+
+func (r *Registry) saveToDiskCache() {
+	path := modelsCachePath()
+	if path == "" {
+		return
+	}
+
+	r.mu.RLock()
+	cache := diskModelsCache{
+		FetchedAt: r.lastFetch.UTC().Format(time.RFC3339Nano),
+		ETag:      r.etag,
+		Models:    r.models,
+	}
+	r.mu.RUnlock()
+
+	data, err := json.MarshalIndent(cache, "", "  ")
+	if err != nil {
+		slog.Warn("failed to marshal models cache", "error", err)
+		return
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Warn("failed to create models cache directory", "error", err)
+		return
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		slog.Warn("failed to write models cache", "error", err)
+	}
 }
 
 func (r *Registry) loadFromDiskCache() (loaded bool, missing bool) {

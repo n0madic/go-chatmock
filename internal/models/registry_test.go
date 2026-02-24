@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,6 +57,40 @@ func TestNewRegistryMissingDiskCache(t *testing.T) {
 	r := NewRegistry(nil)
 	if r.IsPopulated() {
 		t.Fatal("expected empty registry when cache file is missing")
+	}
+}
+
+func TestSaveToDiskCacheWritesFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models_cache.json")
+
+	origPath := modelsCachePath
+	modelsCachePath = func() string { return path }
+	defer func() { modelsCachePath = origPath }()
+
+	r := &Registry{}
+	r.models = []RemoteModel{
+		{Slug: "gpt-test", DisplayName: "gpt-test", Visibility: "list", SupportedInAPI: true},
+	}
+	r.lastFetch = time.Now()
+	r.etag = "W/\"test\""
+
+	r.saveToDiskCache()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected cache file to exist: %v", err)
+	}
+
+	var cache diskModelsCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		t.Fatalf("invalid cache JSON: %v", err)
+	}
+	if len(cache.Models) != 1 || cache.Models[0].Slug != "gpt-test" {
+		t.Fatalf("unexpected cache content: %+v", cache)
+	}
+	if cache.ETag != "W/\"test\"" {
+		t.Fatalf("unexpected etag: %q", cache.ETag)
 	}
 }
 

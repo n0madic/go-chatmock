@@ -3,7 +3,6 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/n0madic/go-chatmock/internal/responses-state"
@@ -116,7 +115,35 @@ func hasResponsesInputPrefix(items []types.ResponsesInputItem, prefix []types.Re
 		return false
 	}
 	for i := range prefix {
-		if !reflect.DeepEqual(items[i], prefix[i]) {
+		if !responsesInputItemEqual(items[i], prefix[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func responsesInputItemEqual(a, b types.ResponsesInputItem) bool {
+	return a.Type == b.Type &&
+		a.Role == b.Role &&
+		a.Name == b.Name &&
+		a.Arguments == b.Arguments &&
+		a.CallID == b.CallID &&
+		a.Output == b.Output &&
+		responsesContentSliceEqual(a.Content, b.Content)
+}
+
+func responsesContentSliceEqual(a, b []types.ResponsesContent) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}

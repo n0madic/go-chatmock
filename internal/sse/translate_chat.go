@@ -12,6 +12,11 @@ import (
 	"github.com/n0madic/go-chatmock/internal/types"
 )
 
+// maxToolArgBufSize is the upper bound (in bytes) for buffered function-call
+// argument deltas per tool call. Prevents unbounded memory growth if the
+// upstream streams an unusually large tool argument payload.
+const maxToolArgBufSize = 1 << 20 // 1 MB
+
 // TranslateChatOptions holds options for SSE chat translation.
 type TranslateChatOptions struct {
 	ReasoningCompat string
@@ -145,8 +150,16 @@ func (st *chatTranslatorState) handleFunctionCallArgumentsDelta(data map[string]
 	if itemID == "" || delta == "" {
 		return
 	}
+	if len(st.toolArgBuf[itemID])+len(delta) > maxToolArgBufSize {
+		slog.Warn("toolArgBuf size limit exceeded, dropping delta", "item_id", itemID, "buf_len", len(st.toolArgBuf[itemID]), "delta_len", len(delta))
+		return
+	}
 	st.toolArgBuf[itemID] += delta
 	if callID := strings.TrimSpace(st.toolItemMap[itemID]); callID != "" && callID != itemID {
+		if len(st.toolArgBuf[callID])+len(delta) > maxToolArgBufSize {
+			slog.Warn("toolArgBuf size limit exceeded, dropping delta", "call_id", callID, "buf_len", len(st.toolArgBuf[callID]), "delta_len", len(delta))
+			return
+		}
 		st.toolArgBuf[callID] += delta
 	}
 }
@@ -371,7 +384,7 @@ func TranslateChat(w http.ResponseWriter, body io.ReadCloser, model string, crea
 		// A stable value is used rather than a UUID so that clients that
 		// read the ID from an early chunk see the same value if they compare
 		// it with later chunks before response.created arrives.
-		responseID: "chatcmpl-stream",
+		responseID:  "chatcmpl-stream",
 		wsState:     map[string]map[string]any{},
 		wsIndex:     map[string]int{},
 		wsNextIndex: 0,

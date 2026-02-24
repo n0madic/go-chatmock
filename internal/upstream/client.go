@@ -21,8 +21,8 @@ import (
 // SSE streams can be long-lived, so we use a generous timeout.
 const upstreamHTTPTimeout = 5 * time.Minute
 
-// httpClient is the shared HTTP client for upstream requests with a timeout.
-var httpClient = &http.Client{Timeout: upstreamHTTPTimeout}
+// defaultHTTPClient is the shared HTTP client for upstream requests with a timeout.
+var defaultHTTPClient = &http.Client{Timeout: upstreamHTTPTimeout}
 
 // Request holds the parameters for an upstream Responses API request.
 type Request struct {
@@ -48,6 +48,8 @@ type Response struct {
 // Client makes requests to the ChatGPT backend.
 type Client struct {
 	TokenManager *auth.TokenManager
+	Sessions     *session.SessionStore
+	HTTPClient   *http.Client
 	Verbose      bool
 	Debug        bool
 	dumpMu       sync.Mutex
@@ -55,7 +57,13 @@ type Client struct {
 
 // NewClient creates a new upstream client.
 func NewClient(tm *auth.TokenManager, verbose, debug bool) *Client {
-	return &Client{TokenManager: tm, Verbose: verbose, Debug: debug}
+	return &Client{
+		TokenManager: tm,
+		Sessions:     session.NewSessionStore(),
+		HTTPClient:   defaultHTTPClient,
+		Verbose:      verbose,
+		Debug:        debug,
+	}
 }
 
 // Do sends a Responses API request to ChatGPT backend and returns the streaming response.
@@ -65,7 +73,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 		return nil, auth.ErrNoCredentials
 	}
 
-	sessionID := session.EnsureSessionID(req.Instructions, req.InputItems, req.SessionID)
+	sessionID := c.Sessions.EnsureSessionID(req.Instructions, req.InputItems, req.SessionID)
 
 	toolChoice := req.ToolChoice
 	switch tc := toolChoice.(type) {
@@ -137,7 +145,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	// caching; the payload field may be required by older API versions.
 	httpReq.Header.Set("session_id", sessionID)
 
-	resp, err := httpClient.Do(httpReq)
+	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("upstream ChatGPT request failed: %w", err)
 	}

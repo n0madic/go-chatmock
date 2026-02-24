@@ -27,6 +27,7 @@ func TestRestoreFunctionCallContextSuccess(t *testing.T) {
 	s := &Server{
 		responsesState: responsesstate.NewStore(5*time.Minute, 100),
 	}
+	defer s.responsesState.Close()
 	s.responsesState.PutContext("resp_1", []types.ResponsesInputItem{
 		{
 			Type:    "message",
@@ -62,6 +63,7 @@ func TestRestoreFunctionCallContextSuccess(t *testing.T) {
 
 func TestRestoreFunctionCallContextMissingPreviousID(t *testing.T) {
 	s := &Server{responsesState: responsesstate.NewStore(5*time.Minute, 100)}
+	defer s.responsesState.Close()
 	input := []types.ResponsesInputItem{
 		{Type: "function_call_output", CallID: "call_1", Output: "content"},
 	}
@@ -77,6 +79,7 @@ func TestRestoreFunctionCallContextMissingPreviousID(t *testing.T) {
 
 func TestRestoreFunctionCallContextUnknownPreviousID(t *testing.T) {
 	s := &Server{responsesState: responsesstate.NewStore(5*time.Minute, 100)}
+	defer s.responsesState.Close()
 	input := []types.ResponsesInputItem{
 		{Type: "function_call_output", CallID: "call_1", Output: "content"},
 	}
@@ -92,6 +95,7 @@ func TestRestoreFunctionCallContextUnknownPreviousID(t *testing.T) {
 
 func TestRestoreFunctionCallContextUnknownPreviousIDWithoutToolOutput(t *testing.T) {
 	s := &Server{responsesState: responsesstate.NewStore(5*time.Minute, 100)}
+	defer s.responsesState.Close()
 	input := []types.ResponsesInputItem{
 		{Type: "message", Role: "user", Content: []types.ResponsesContent{{Type: "input_text", Text: "hello"}}},
 	}
@@ -107,6 +111,7 @@ func TestRestoreFunctionCallContextUnknownPreviousIDWithoutToolOutput(t *testing
 
 func TestRestoreFunctionCallContextAcceptsPreviousIDWithInstructionsOnlyState(t *testing.T) {
 	s := &Server{responsesState: responsesstate.NewStore(5*time.Minute, 100)}
+	defer s.responsesState.Close()
 	s.responsesState.PutInstructions("resp_1", "system policy")
 	input := []types.ResponsesInputItem{
 		{Type: "message", Role: "user", Content: []types.ResponsesContent{{Type: "input_text", Text: "hello"}}},
@@ -125,6 +130,7 @@ func TestRestoreFunctionCallContextMissingCallInState(t *testing.T) {
 	s := &Server{
 		responsesState: responsesstate.NewStore(5*time.Minute, 100),
 	}
+	defer s.responsesState.Close()
 	s.responsesState.Put("resp_1", []responsesstate.FunctionCall{
 		{CallID: "call_2", Name: "read_file", Arguments: "{}"},
 	})
@@ -145,6 +151,7 @@ func TestRestoreFunctionCallContextNoPrependSkipsContextMerge(t *testing.T) {
 	s := &Server{
 		responsesState: responsesstate.NewStore(5*time.Minute, 100),
 	}
+	defer s.responsesState.Close()
 	s.responsesState.PutContext("resp_1", []types.ResponsesInputItem{
 		{
 			Type:    "message",
@@ -175,6 +182,7 @@ func TestRestoreFunctionCallContextNoPrependSkipsContextMerge(t *testing.T) {
 
 func TestRestoreFunctionCallContextNoPrependAllowsUnknownPreviousIDWithoutToolOutput(t *testing.T) {
 	s := &Server{responsesState: responsesstate.NewStore(5*time.Minute, 100)}
+	defer s.responsesState.Close()
 	input := []types.ResponsesInputItem{
 		{Type: "message", Role: "user", Content: []types.ResponsesContent{{Type: "input_text", Text: "hello"}}},
 	}
@@ -215,6 +223,53 @@ func TestIsUnsupportedParameterError(t *testing.T) {
 	}
 	if isUnsupportedParameterError(raw, "include") {
 		t.Fatal("expected false for include")
+	}
+}
+
+func TestResponsesInputItemEqual(t *testing.T) {
+	a := types.ResponsesInputItem{
+		Type:    "message",
+		Role:    "user",
+		Content: []types.ResponsesContent{{Type: "input_text", Text: "hello"}},
+	}
+	b := types.ResponsesInputItem{
+		Type:    "message",
+		Role:    "user",
+		Content: []types.ResponsesContent{{Type: "input_text", Text: "hello"}},
+	}
+	if !responsesInputItemEqual(a, b) {
+		t.Fatal("identical items should be equal")
+	}
+
+	// Different role
+	c := b
+	c.Role = "assistant"
+	if responsesInputItemEqual(a, c) {
+		t.Fatal("items with different roles should not be equal")
+	}
+
+	// Different content text
+	d := types.ResponsesInputItem{
+		Type:    "message",
+		Role:    "user",
+		Content: []types.ResponsesContent{{Type: "input_text", Text: "bye"}},
+	}
+	if responsesInputItemEqual(a, d) {
+		t.Fatal("items with different content should not be equal")
+	}
+
+	// nil vs empty content
+	e := types.ResponsesInputItem{Type: "message", Role: "user", Content: nil}
+	f := types.ResponsesInputItem{Type: "message", Role: "user", Content: []types.ResponsesContent{}}
+	if responsesInputItemEqual(e, f) {
+		t.Fatal("nil content and empty content should not be equal")
+	}
+
+	// Both nil content
+	g := types.ResponsesInputItem{Type: "function_call", CallID: "c1", Name: "fn", Arguments: "{}"}
+	h := types.ResponsesInputItem{Type: "function_call", CallID: "c1", Name: "fn", Arguments: "{}"}
+	if !responsesInputItemEqual(g, h) {
+		t.Fatal("identical function_call items should be equal")
 	}
 }
 
