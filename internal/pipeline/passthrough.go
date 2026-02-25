@@ -109,9 +109,12 @@ func (p *Pipeline) ExecutePassthrough(
 		delete(raw, key)
 	}
 
+	// Extract system messages from input into instructions (upstream rejects them).
+	inputSystemInstructions := extractAndRemoveSystemMessages(raw)
+
 	// Instructions composition
 	clientInstructions := strings.TrimSpace(stream.StringFromAny(raw["instructions"]))
-	instructions := normalize.ComposeInstructions(p.Config, p.Store, "responses", model, clientInstructions, "", previousResponseID)
+	instructions := normalize.ComposeInstructions(p.Config, p.Store, "responses", model, clientInstructions, inputSystemInstructions, previousResponseID)
 	if instructions != "" {
 		raw["instructions"] = instructions
 	}
@@ -393,4 +396,68 @@ func extractFunctionCallFromMap(item map[string]any) (state.FunctionCall, bool) 
 func stringOrEmpty(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
+}
+
+// extractAndRemoveSystemMessages removes system-role messages from the raw
+// input array and returns their concatenated text. The upstream ChatGPT Codex
+// backend rejects system messages in input — they must go into instructions.
+func extractAndRemoveSystemMessages(raw map[string]any) string {
+	items, ok := raw["input"].([]any)
+	if !ok || len(items) == 0 {
+		return ""
+	}
+	var kept []any
+	var parts []string
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			kept = append(kept, item)
+			continue
+		}
+		role, _ := m["role"].(string)
+		if role != "system" {
+			kept = append(kept, item)
+			continue
+		}
+		if text := extractTextFromRawContent(m["content"]); text != "" {
+			parts = append(parts, text)
+		}
+		// drop system item from input
+	}
+	if len(parts) > 0 {
+		raw["input"] = kept
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// extractTextFromRawContent extracts plain text from a content field that may
+// be a string, an array of content parts, or nil.
+func extractTextFromRawContent(content any) string {
+	if content == nil {
+		return ""
+	}
+	if s, ok := content.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	arr, ok := content.([]any)
+	if !ok {
+		return ""
+	}
+	var parts []string
+	for _, part := range arr {
+		pm, ok := part.(map[string]any)
+		if !ok {
+			continue
+		}
+		typ, _ := pm["type"].(string)
+		if typ != "" && typ != "text" && typ != "input_text" {
+			continue
+		}
+		text, _ := pm["text"].(string)
+		text = strings.TrimSpace(text)
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
