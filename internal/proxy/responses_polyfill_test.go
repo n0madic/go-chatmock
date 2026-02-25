@@ -23,6 +23,19 @@ func TestMissingFunctionCallOutputIDs(t *testing.T) {
 	}
 }
 
+func TestMissingFunctionCallOutputIDsCustomToolCall(t *testing.T) {
+	items := []types.ResponsesInputItem{
+		{Type: "custom_tool_call", CallID: "call_ct1", Name: "ApplyPatch", Input: "patch"},
+		{Type: "function_call_output", CallID: "call_ct1", Output: "ok"},
+		{Type: "function_call_output", CallID: "call_ct2", Output: "miss"},
+	}
+
+	got := missingFunctionCallOutputIDs(items)
+	if len(got) != 1 || got[0] != "call_ct2" {
+		t.Fatalf("expected [call_ct2], got %v", got)
+	}
+}
+
 func TestRestoreFunctionCallContextSuccess(t *testing.T) {
 	s := &Server{
 		responsesState: responsesstate.NewStore(5*time.Minute, 100),
@@ -58,6 +71,41 @@ func TestRestoreFunctionCallContextSuccess(t *testing.T) {
 	}
 	if got[2].Type != "function_call_output" || got[2].CallID != "call_1" {
 		t.Fatalf("unexpected final tool output item: %+v", got[2])
+	}
+}
+
+func TestRestoreFunctionCallContextCustomToolCall(t *testing.T) {
+	s := &Server{
+		responsesState: responsesstate.NewStore(5*time.Minute, 100),
+	}
+	defer s.responsesState.Close()
+	s.responsesState.Put("resp_ct", []responsesstate.FunctionCall{
+		{Type: "custom_tool_call", CallID: "call_ct1", Name: "ApplyPatch", Arguments: "patch data"},
+	})
+
+	input := []types.ResponsesInputItem{
+		{Type: "function_call_output", CallID: "call_ct1", Output: "applied"},
+	}
+
+	got, err := s.restoreFunctionCallContext(input, "resp_ct", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(got))
+	}
+	restored := got[0]
+	if restored.Type != "custom_tool_call" {
+		t.Fatalf("expected restored type custom_tool_call, got %q", restored.Type)
+	}
+	if restored.CallID != "call_ct1" || restored.Name != "ApplyPatch" {
+		t.Fatalf("unexpected restored item: %+v", restored)
+	}
+	if restored.Input != "patch data" {
+		t.Fatalf("expected Input to be set, got %v", restored.Input)
+	}
+	if restored.Arguments != "" {
+		t.Fatalf("expected Arguments to be empty for custom_tool_call, got %q", restored.Arguments)
 	}
 }
 
@@ -212,6 +260,49 @@ func TestExtractFunctionCallFromOutputItem(t *testing.T) {
 		t.Fatalf("unexpected call: %+v", call)
 	}
 	if !strings.Contains(call.Arguments, `"pattern":"TODO"`) {
+		t.Fatalf("expected JSON arguments, got %q", call.Arguments)
+	}
+}
+
+func TestExtractFunctionCallFromOutputItemCustomToolCall(t *testing.T) {
+	item := map[string]any{
+		"type":    "custom_tool_call",
+		"call_id": "call_ct1",
+		"name":    "ApplyPatch",
+		"input":   "--- a/file\n+++ b/file",
+	}
+
+	call, ok := extractFunctionCallFromOutputItem(item)
+	if !ok {
+		t.Fatal("expected ok=true for custom_tool_call")
+	}
+	if call.Type != "custom_tool_call" {
+		t.Fatalf("expected type custom_tool_call, got %q", call.Type)
+	}
+	if call.CallID != "call_ct1" || call.Name != "ApplyPatch" {
+		t.Fatalf("unexpected call: %+v", call)
+	}
+	if call.Arguments != "--- a/file\n+++ b/file" {
+		t.Fatalf("expected input as arguments, got %q", call.Arguments)
+	}
+}
+
+func TestExtractFunctionCallFromOutputItemCustomToolCallObjectInput(t *testing.T) {
+	item := map[string]any{
+		"type":    "custom_tool_call",
+		"call_id": "call_ct2",
+		"name":    "Tool",
+		"input":   map[string]any{"key": "val"},
+	}
+
+	call, ok := extractFunctionCallFromOutputItem(item)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if call.Type != "custom_tool_call" {
+		t.Fatalf("expected type custom_tool_call, got %q", call.Type)
+	}
+	if call.Arguments != `{"key":"val"}` {
 		t.Fatalf("expected JSON arguments, got %q", call.Arguments)
 	}
 }

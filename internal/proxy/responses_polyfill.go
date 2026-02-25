@@ -87,12 +87,21 @@ func (s *Server) restoreFunctionCallContext(inputItems []types.ResponsesInputIte
 			if _, shouldInsert := missingSet[item.CallID]; shouldInsert {
 				if _, alreadyInserted := inserted[item.CallID]; !alreadyInserted {
 					call := callByID[item.CallID]
-					augmented = append(augmented, types.ResponsesInputItem{
-						Type:      "function_call",
-						CallID:    call.CallID,
-						Name:      call.Name,
-						Arguments: call.Arguments,
-					})
+					callType := call.Type
+					if callType == "" {
+						callType = "function_call"
+					}
+					restored := types.ResponsesInputItem{
+						Type:   callType,
+						CallID: call.CallID,
+						Name:   call.Name,
+					}
+					if callType == "custom_tool_call" {
+						restored.Input = call.Arguments
+					} else {
+						restored.Arguments = call.Arguments
+					}
+					augmented = append(augmented, restored)
 					inserted[item.CallID] = struct{}{}
 				}
 			}
@@ -129,7 +138,23 @@ func responsesInputItemEqual(a, b types.ResponsesInputItem) bool {
 		a.Arguments == b.Arguments &&
 		a.CallID == b.CallID &&
 		a.Output == b.Output &&
+		responsesInputAnyEqual(a.Input, b.Input) &&
 		responsesContentSliceEqual(a.Content, b.Content)
+}
+
+func responsesInputAnyEqual(a, b any) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	aj, aerr := json.Marshal(a)
+	bj, berr := json.Marshal(b)
+	if aerr != nil || berr != nil {
+		return false
+	}
+	return string(aj) == string(bj)
 }
 
 func responsesContentSliceEqual(a, b []types.ResponsesContent) bool {
@@ -153,7 +178,7 @@ func responsesContentSliceEqual(a, b []types.ResponsesContent) bool {
 func missingFunctionCallOutputIDs(items []types.ResponsesInputItem) []string {
 	existingCalls := make(map[string]struct{})
 	for _, item := range items {
-		if item.Type == "function_call" && item.CallID != "" {
+		if (item.Type == "function_call" || item.Type == "custom_tool_call") && item.CallID != "" {
 			existingCalls[item.CallID] = struct{}{}
 		}
 	}
@@ -201,7 +226,7 @@ func extractFunctionCallFromOutputItem(item map[string]any) (responsesstate.Func
 	}
 
 	itemType := stringFromAny(item["type"])
-	if itemType != "function_call" {
+	if itemType != "function_call" && itemType != "custom_tool_call" {
 		return responsesstate.FunctionCall{}, false
 	}
 
@@ -210,12 +235,13 @@ func extractFunctionCallFromOutputItem(item map[string]any) (responsesstate.Func
 		callID = stringFromAny(item["id"])
 	}
 	name := stringFromAny(item["name"])
-	args := stringFromAny(item["arguments"])
+	args := outputItemArgumentsString(item)
 	if callID == "" || name == "" {
 		return responsesstate.FunctionCall{}, false
 	}
 
 	return responsesstate.FunctionCall{
+		Type:      itemType,
 		CallID:    callID,
 		Name:      name,
 		Arguments: args,

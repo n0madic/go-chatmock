@@ -98,6 +98,33 @@ data: {"type":"response.completed","response":{"id":"resp_tool_raw"}}
 	}
 }
 
+func TestTranslateChatCustomToolCallSSE(t *testing.T) {
+	stream := `data: {"type":"response.created","response":{"id":"resp_custom"}}
+
+data: {"type":"response.output_item.added","item":{"type":"custom_tool_call","id":"item_ct","call_id":"call_ct1","name":"ApplyPatch","input":""}}
+
+data: {"type":"response.function_call_arguments.delta","item_id":"item_ct","delta":"patch content"}
+
+data: {"type":"response.output_item.done","item":{"type":"custom_tool_call","id":"item_ct","call_id":"call_ct1","name":"ApplyPatch","input":"patch content"}}
+
+data: {"type":"response.completed","response":{"id":"resp_custom"}}
+`
+
+	w := newFlusherRecorder()
+	TranslateChat(w, io.NopCloser(strings.NewReader(stream)), "gpt-5.3-codex", time.Now().Unix(), TranslateChatOptions{})
+
+	out := w.Body.String()
+	if !strings.Contains(out, `"name":"ApplyPatch"`) {
+		t.Fatalf("expected ApplyPatch tool call in output, got: %s", out)
+	}
+	if !strings.Contains(out, `"finish_reason":"tool_calls"`) {
+		t.Fatalf("expected tool_calls finish_reason, got: %s", out)
+	}
+	if !strings.Contains(out, "data: [DONE]") {
+		t.Fatalf("expected [DONE] marker, got: %s", out)
+	}
+}
+
 func TestTranslateChatSkipsCommentaryAndEndsWithToolCalls(t *testing.T) {
 	stream := `data: {"type":"response.created","response":{"id":"resp_commentary"}}
 

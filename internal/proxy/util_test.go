@@ -50,6 +50,96 @@ data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tok
 	}
 }
 
+func TestOutputItemArgumentsString(t *testing.T) {
+	tests := []struct {
+		name string
+		item map[string]any
+		want string
+	}{
+		{"arguments_string", map[string]any{"arguments": `{"a":1}`}, `{"a":1}`},
+		{"input_string", map[string]any{"input": "patch text"}, "patch text"},
+		{"input_object", map[string]any{"input": map[string]any{"key": "val"}}, `{"key":"val"}`},
+		{"parameters_string", map[string]any{"parameters": `{"b":2}`}, `{"b":2}`},
+		{"arguments_over_input", map[string]any{"arguments": `{"a":1}`, "input": "fallback"}, `{"a":1}`},
+		{"empty", map[string]any{}, ""},
+		{"nil_values", map[string]any{"arguments": nil, "input": nil}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := outputItemArgumentsString(tt.item)
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFunctionToolCallFromOutputItemCustomToolCall(t *testing.T) {
+	item := map[string]any{
+		"type":    "custom_tool_call",
+		"call_id": "call_ct1",
+		"name":    "ApplyPatch",
+		"input":   "patch content",
+	}
+	tc, ok := functionToolCallFromOutputItem(item)
+	if !ok {
+		t.Fatal("expected ok=true for custom_tool_call")
+	}
+	if tc.ID != "call_ct1" {
+		t.Fatalf("expected call_id call_ct1, got %q", tc.ID)
+	}
+	if tc.Function.Name != "ApplyPatch" {
+		t.Fatalf("expected name ApplyPatch, got %q", tc.Function.Name)
+	}
+	if tc.Function.Arguments != "patch content" {
+		t.Fatalf("expected arguments 'patch content', got %q", tc.Function.Arguments)
+	}
+}
+
+func TestFunctionToolCallFromOutputItemCustomToolCallObjectInput(t *testing.T) {
+	item := map[string]any{
+		"type":    "custom_tool_call",
+		"call_id": "call_ct2",
+		"name":    "Tool",
+		"input":   map[string]any{"key": "value"},
+	}
+	tc, ok := functionToolCallFromOutputItem(item)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if tc.Function.Arguments != `{"key":"value"}` {
+		t.Fatalf("expected JSON arguments, got %q", tc.Function.Arguments)
+	}
+}
+
+func TestCollectTextResponseFromSSECustomToolCall(t *testing.T) {
+	stream := `data: {"type":"response.created","response":{"id":"resp_ct"}}
+data: {"type":"response.output_item.done","item":{"type":"custom_tool_call","call_id":"call_ct1","name":"ApplyPatch","input":"patch"}}
+data: {"type":"response.completed","response":{"id":"resp_ct","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}
+`
+	got := collectTextResponseFromSSE(io.NopCloser(strings.NewReader(stream)), collectTextResponseOptions{
+		InitialResponseID: "fallback",
+		CollectUsage:      true,
+		CollectToolCalls:  true,
+	})
+
+	if len(got.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(got.ToolCalls))
+	}
+	if got.ToolCalls[0].Function.Name != "ApplyPatch" {
+		t.Fatalf("expected name ApplyPatch, got %q", got.ToolCalls[0].Function.Name)
+	}
+	if got.ToolCalls[0].Function.Arguments != "patch" {
+		t.Fatalf("expected arguments 'patch', got %q", got.ToolCalls[0].Function.Arguments)
+	}
+	if len(got.OutputItems) != 1 {
+		t.Fatalf("expected 1 output item, got %d", len(got.OutputItems))
+	}
+	if got.OutputItems[0].Type != "custom_tool_call" {
+		t.Fatalf("expected output item type custom_tool_call, got %q", got.OutputItems[0].Type)
+	}
+}
+
 func TestCollectTextResponseFromSSEStopOnFailed(t *testing.T) {
 	stream := `data: {"type":"response.created","response":{"id":"resp_fail"}}
 data: {"type":"response.output_text.delta","delta":"a"}

@@ -156,6 +156,63 @@ func TestComposeInstructionsForRouteChatFallsBackToBasePrompt(t *testing.T) {
 	}
 }
 
+func TestParseResponsesStyleToolsFromRawCustomTool(t *testing.T) {
+	raw := []any{
+		map[string]any{
+			"type":        "custom",
+			"name":        "ApplyPatch",
+			"description": "Apply a patch",
+			"format":      map[string]any{"type": "text"},
+		},
+		map[string]any{
+			"type":       "function",
+			"name":       "read_file",
+			"parameters": map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+	}
+	tools := parseResponsesStyleToolsFromRaw(raw)
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(tools))
+	}
+	if tools[0].Type != "custom" || tools[0].Name != "ApplyPatch" {
+		t.Fatalf("unexpected first tool: %+v", tools[0])
+	}
+	if tools[1].Type != "function" || tools[1].Name != "read_file" {
+		t.Fatalf("unexpected second tool: %+v", tools[1])
+	}
+}
+
+func TestNormalizeUniversalToolsMergesCustomTools(t *testing.T) {
+	s := &Server{
+		Config: &config.ServerConfig{},
+	}
+	raw := mustDecodeMap(t, `{
+		"tools": [
+			{"type":"function","name":"read_file","parameters":{"type":"object","properties":{}}},
+			{"type":"custom","name":"ApplyPatch","format":{"type":"text"}}
+		]
+	}`)
+
+	var chatReq types.ChatCompletionRequest
+	var responsesReq types.ResponsesRequest
+	json.Unmarshal([]byte(`{"tools":[{"type":"function","name":"read_file","parameters":{"type":"object","properties":{}}}]}`), &responsesReq)
+
+	tools, _, _, _, terr := s.normalizeUniversalTools(raw, universalRouteResponses, chatReq, responsesReq, "auto")
+	if terr != nil {
+		t.Fatalf("normalizeUniversalTools error: %+v", terr)
+	}
+
+	hasCustom := false
+	for _, tool := range tools {
+		if tool.Type == "custom" && tool.Name == "ApplyPatch" {
+			hasCustom = true
+		}
+	}
+	if !hasCustom {
+		t.Fatalf("expected custom tool ApplyPatch to be merged, tools: %+v", tools)
+	}
+}
+
 func TestNormalizeUniversalRequestResponsesDebugModelBypassesValidation(t *testing.T) {
 	s := &Server{
 		Config: &config.ServerConfig{

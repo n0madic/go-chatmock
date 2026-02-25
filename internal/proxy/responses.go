@@ -265,6 +265,20 @@ func inputItemFromOutputItem(item types.ResponsesOutputItem) (types.ResponsesInp
 			Name:      item.Name,
 			Arguments: item.Arguments,
 		}, true
+	case "custom_tool_call":
+		callID := item.CallID
+		if callID == "" {
+			callID = item.ID
+		}
+		if callID == "" || item.Name == "" {
+			return types.ResponsesInputItem{}, false
+		}
+		return types.ResponsesInputItem{
+			Type:   "custom_tool_call",
+			CallID: callID,
+			Name:   item.Name,
+			Input:  item.Input,
+		}, true
 	default:
 		return types.ResponsesInputItem{}, false
 	}

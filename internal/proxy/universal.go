@@ -556,6 +556,26 @@ func (s *Server) normalizeUniversalTools(
 		}
 	}
 
+	// Merge custom tools from non-primary sources so they are not lost.
+	primaryNames := make(map[string]struct{}, len(primary))
+	for _, t := range primary {
+		if t.Name != "" {
+			primaryNames[t.Name] = struct{}{}
+		}
+	}
+	for _, src := range [][]types.ResponsesTool{chatTools, responsesTools, responsesStyleTools} {
+		for _, t := range src {
+			if t.Type != "custom" || t.Name == "" {
+				continue
+			}
+			if _, exists := primaryNames[t.Name]; exists {
+				continue
+			}
+			primary = append(primary, t)
+			primaryNames[t.Name] = struct{}{}
+		}
+	}
+
 	extraTools, err := parseExplicitResponsesTools(chatReq.ResponsesTools)
 	if err != nil {
 		return nil, nil, false, false, &requestNormalizeError{
@@ -776,7 +796,7 @@ func (s *Server) storeChatStreamState(raw []byte, requestInput []types.Responses
 
 	var calls []types.ResponsesInputItem
 	for _, it := range outputItemsToInputItems(outputItems) {
-		if it.Type == "function_call" {
+		if it.Type == "function_call" || it.Type == "custom_tool_call" {
 			calls = append(calls, it)
 		}
 	}
@@ -791,13 +811,18 @@ func responseStateCallsFromInputItems(items []types.ResponsesInputItem) []respon
 	}
 	var calls []responsesstate.FunctionCall
 	for _, it := range items {
-		if it.Type != "function_call" || strings.TrimSpace(it.CallID) == "" || strings.TrimSpace(it.Name) == "" {
+		if (it.Type != "function_call" && it.Type != "custom_tool_call") || strings.TrimSpace(it.CallID) == "" || strings.TrimSpace(it.Name) == "" {
 			continue
 		}
+		args := it.Arguments
+		if it.Type == "custom_tool_call" && args == "" && it.Input != nil {
+			args = stringFromAny(it.Input)
+		}
 		calls = append(calls, responsesstate.FunctionCall{
+			Type:      it.Type,
 			CallID:    strings.TrimSpace(it.CallID),
 			Name:      strings.TrimSpace(it.Name),
-			Arguments: it.Arguments,
+			Arguments: args,
 		})
 	}
 	return calls

@@ -168,6 +168,7 @@ type collectedTextResponse struct {
 	ReasoningSummary string
 	ReasoningFull    string
 	ToolCalls        []types.ToolCall
+	OutputItems      []types.ResponsesOutputItem
 	Usage            *types.Usage
 	ErrorMessage     string
 }
@@ -215,6 +216,9 @@ func collectTextResponseFromSSE(body io.ReadCloser, opts collectTextResponseOpti
 				if tc, ok := functionToolCallFromOutputItem(item); ok {
 					out.ToolCalls = append(out.ToolCalls, tc)
 				}
+				if item != nil {
+					out.OutputItems = append(out.OutputItems, unmarshalOutputItem(item))
+				}
 			}
 		case "response.failed":
 			out.ErrorMessage = responseErrorMessageFromEvent(evt.Data)
@@ -232,11 +236,35 @@ func collectTextResponseFromSSE(body io.ReadCloser, opts collectTextResponseOpti
 	return out
 }
 
+// outputItemArgumentsString extracts a string representation of tool arguments
+// from an output item map. It checks "arguments", "input", and "parameters" keys,
+// handling both string and object values.
+func outputItemArgumentsString(item map[string]any) string {
+	for _, key := range []string{"arguments", "input", "parameters"} {
+		v, ok := item[key]
+		if !ok || v == nil {
+			continue
+		}
+		switch val := v.(type) {
+		case string:
+			return val
+		default:
+			b, err := json.Marshal(val)
+			if err != nil {
+				continue
+			}
+			return string(b)
+		}
+	}
+	return ""
+}
+
 func functionToolCallFromOutputItem(item map[string]any) (types.ToolCall, bool) {
 	if item == nil {
 		return types.ToolCall{}, false
 	}
-	if itemType, _ := item["type"].(string); itemType != "function_call" {
+	itemType, _ := item["type"].(string)
+	if itemType != "function_call" && itemType != "custom_tool_call" {
 		return types.ToolCall{}, false
 	}
 
@@ -245,7 +273,7 @@ func functionToolCallFromOutputItem(item map[string]any) (types.ToolCall, bool) 
 		callID = strings.TrimSpace(stringOrEmpty(item, "id"))
 	}
 	name := strings.TrimSpace(stringOrEmpty(item, "name"))
-	args := stringOrEmpty(item, "arguments")
+	args := outputItemArgumentsString(item)
 	if callID == "" || name == "" {
 		return types.ToolCall{}, false
 	}

@@ -122,7 +122,7 @@ func (st *chatTranslatorState) handleOutputItemAdded(data map[string]any) {
 		return
 	}
 
-	if itemType != "function_call" && itemType != "web_search_call" {
+	if itemType != "function_call" && itemType != "custom_tool_call" && itemType != "web_search_call" {
 		return
 	}
 
@@ -221,11 +221,11 @@ func (st *chatTranslatorState) bufferedToolArgs(item map[string]any) (any, bool)
 	return nil, false
 }
 
-// handleOutputItemDone processes "response.output_item.done" events for function/web-search calls.
+// handleOutputItemDone processes "response.output_item.done" events for function/custom/web-search calls.
 func (st *chatTranslatorState) handleOutputItemDone(data map[string]any) {
 	item, _ := data["item"].(map[string]any)
 	itemType, _ := item["type"].(string)
-	if itemType != "function_call" && itemType != "web_search_call" {
+	if itemType != "function_call" && itemType != "custom_tool_call" && itemType != "web_search_call" {
 		return
 	}
 

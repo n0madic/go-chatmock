@@ -23,8 +23,9 @@ const (
 	cleanupTick = 30 * time.Second
 )
 
-// FunctionCall stores a function_call item so it can be replayed in a future request.
+// FunctionCall stores a function_call or custom_tool_call item so it can be replayed in a future request.
 type FunctionCall struct {
+	Type      string // "function_call" or "custom_tool_call"; defaults to "function_call" if empty
 	CallID    string
 	Name      string
 	Arguments string
@@ -225,6 +226,7 @@ func (s *Store) Get(responseID string) ([]FunctionCall, bool) {
 	for _, id := range keys {
 		c := e.calls[id]
 		out = append(out, FunctionCall{
+			Type:      c.Type,
 			CallID:    c.CallID,
 			Name:      c.Name,
 			Arguments: c.Arguments,
@@ -349,6 +351,7 @@ func buildCallMap(calls []FunctionCall) map[string]FunctionCall {
 			continue
 		}
 		callMap[c.CallID] = FunctionCall{
+			Type:      c.Type,
 			CallID:    c.CallID,
 			Name:      c.Name,
 			Arguments: c.Arguments,
