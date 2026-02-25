@@ -104,6 +104,11 @@ func (p *Pipeline) ExecutePassthrough(
 	}
 	delete(raw, "previous_response_id")
 
+	// Strip fields unsupported by the upstream ChatGPT Codex backend.
+	for _, key := range []string{"metadata", "stream_options", "user"} {
+		delete(raw, key)
+	}
+
 	// Instructions composition
 	clientInstructions := strings.TrimSpace(stream.StringFromAny(raw["instructions"]))
 	instructions := normalize.ComposeInstructions(p.Config, p.Store, "responses", model, clientInstructions, "", previousResponseID)
