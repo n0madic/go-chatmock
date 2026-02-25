@@ -77,6 +77,16 @@ func (p *Pipeline) ExecutePassthrough(
 		}
 	}
 
+	// Extract system messages from input into instructions BEFORE context
+	// restoration — restorePreviousContext changes raw["input"] to a typed
+	// slice which the []any-based extractor cannot inspect.
+	inputSystemInstructions := extractAndRemoveSystemMessages(raw)
+
+	// Strip fields unsupported by the upstream ChatGPT Codex backend.
+	for _, key := range []string{"metadata", "stream_options", "user", "prompt_cache_retention"} {
+		delete(raw, key)
+	}
+
 	// Handle previous_response_id polyfill
 	conversationID := normalize.ExtractConversationID(raw)
 	previousResponseID := strings.TrimSpace(stream.StringFromAny(raw["previous_response_id"]))
@@ -103,14 +113,6 @@ func (p *Pipeline) ExecutePassthrough(
 		}
 	}
 	delete(raw, "previous_response_id")
-
-	// Strip fields unsupported by the upstream ChatGPT Codex backend.
-	for _, key := range []string{"metadata", "stream_options", "user", "prompt_cache_retention"} {
-		delete(raw, key)
-	}
-
-	// Extract system messages from input into instructions (upstream rejects them).
-	inputSystemInstructions := extractAndRemoveSystemMessages(raw)
 
 	// Instructions composition
 	clientInstructions := strings.TrimSpace(stream.StringFromAny(raw["instructions"]))
