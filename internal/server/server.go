@@ -140,11 +140,20 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Passthrough: only on /v1/responses route, not chat
 	ctx := &pipeline.RequestContext{
 		Context:   r.Context(),
 		SessionID: strings.TrimSpace(r.Header.Get("X-Session-Id")),
 	}
+
+	// Passthrough: when the body has a top-level `input` field (Responses API
+	// native clients like Cursor). This preserves all SDK fields (metadata,
+	// prompt_cache_retention, custom tool formats, etc.) that the normalized
+	// path would drop.
+	if pipeline.BodyHasInputField(body) {
+		s.Pipeline.ExecutePassthrough(ctx, w, body, s.responsesEnc)
+		return
+	}
+
 	s.Pipeline.Execute(ctx, w, body, "chat", s.chatEnc, s.responsesEnc)
 }
 
