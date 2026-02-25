@@ -175,6 +175,8 @@ func TestOpenAIClientCompatChatCompletionsAcceptsResponsesShape(t *testing.T) {
 			{
 				body: `data: {"type":"response.created","response":{"id":"resp_chat_input"}}
 
+data: {"type":"response.output_text.delta","delta":"Accepted input field"}
+
 data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Accepted input field"}]}}
 
 data: {"type":"response.completed","response":{"id":"resp_chat_input"}}
@@ -198,17 +200,17 @@ data: {"type":"response.completed","response":{"id":"resp_chat_input"}}
 		t.Fatalf("status: got %d want %d body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
 
-	// When the request uses the "input" field, the response format should be
-	// Responses API (passthrough), not Chat Completions.
-	var out types.ResponsesResponse
+	// Even when the request uses the "input" field, the chat endpoint always
+	// responds in Chat Completions format (route determines response format).
+	var out types.ChatCompletionResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
 	}
-	if out.ID != "resp_chat_input" {
-		t.Fatalf("unexpected response ID: got %q want %q", out.ID, "resp_chat_input")
+	if len(out.Choices) != 1 {
+		t.Fatalf("expected one choice, got %d: %s", len(out.Choices), w.Body.String())
 	}
-	if len(out.Output) != 1 || out.Output[0].Content[0].Text != "Accepted input field" {
-		t.Fatalf("unexpected responses output: %+v", out)
+	if got := out.Choices[0].Message.Content; got != "Accepted input field" {
+		t.Fatalf("unexpected content: got %q want %q", got, "Accepted input field")
 	}
 	if len(up.calls) != 1 || len(up.calls[0].InputItems) != 1 {
 		t.Fatalf("unexpected upstream calls: %+v", up.calls)
@@ -253,20 +255,22 @@ data: {"type":"response.completed","response":{"id":"resp_chat_tools"}}
 		t.Fatalf("status: got %d want %d body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
 
-	// When the request uses the "input" field, the response format should be
-	// Responses API (passthrough), not Chat Completions.
-	var out types.ResponsesResponse
+	// Even when the request uses the "input" field, the chat endpoint always
+	// responds in Chat Completions format (route determines response format).
+	var out types.ChatCompletionResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
 	}
-	if out.ID != "resp_chat_tools" {
-		t.Fatalf("unexpected response ID: got %q want %q", out.ID, "resp_chat_tools")
+	if len(out.Choices) != 1 {
+		t.Fatalf("expected one choice, got %d: %s", len(out.Choices), w.Body.String())
 	}
-	if len(out.Output) != 1 {
-		t.Fatalf("expected one output item, got %+v", out.Output)
+	choice := out.Choices[0]
+	if len(choice.Message.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %d: %s", len(choice.Message.ToolCalls), w.Body.String())
 	}
-	if out.Output[0].Type != "function_call" || out.Output[0].Name != "ReadFile" || !strings.Contains(out.Output[0].Arguments, `"path":"README.md"`) {
-		t.Fatalf("unexpected function call in responses output: %+v", out.Output[0])
+	tc := choice.Message.ToolCalls[0]
+	if tc.Function.Name != "ReadFile" || !strings.Contains(tc.Function.Arguments, `"path":"README.md"`) {
+		t.Fatalf("unexpected tool call: %+v", tc)
 	}
 
 	if len(up.calls) != 1 {
@@ -482,6 +486,55 @@ data: {"type":"response.completed","response":{"id":"resp_tool_stream"}}
 	}
 	if !strings.Contains(body, `"finish_reason":"tool_calls"`) {
 		t.Fatalf("expected tool_calls finish_reason in chat stream, got: %s", body)
+	}
+	if !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("missing [DONE] marker in chat stream: %s", body)
+	}
+}
+
+func TestOpenAIClientCompatChatStreamingCustomToolCalls(t *testing.T) {
+	up := &queuedUpstreamClient{
+		results: []queuedUpstreamResult{
+			{
+				body: `data: {"type":"response.created","response":{"id":"resp_custom_tool_stream"}}
+
+data: {"type":"response.output_item.done","item":{"type":"custom_tool_call","call_id":"call_patch","name":"ApplyPatch","input":"*** Begin Patch\n*** End Patch\n"}}
+
+data: {"type":"response.completed","response":{"id":"resp_custom_tool_stream"}}
+`,
+			},
+		},
+	}
+	s := newCompatTestServerT(t, up)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gpt-5.3-codex",
+		"stream":true,
+		"messages":[{"role":"user","content":"patch it"}],
+		"tools":[
+			{"type":"custom","name":"ApplyPatch","format":{"type":"grammar","syntax":"lark","definition":"start: begin_patch end_patch"}}
+		]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want %d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content-type: got %q want %q", ct, "text/event-stream")
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"name":"ApplyPatch"`) {
+		t.Fatalf("expected custom tool call in chat stream, got: %s", body)
+	}
+	if !strings.Contains(body, `"finish_reason":"tool_calls"`) {
+		t.Fatalf("expected tool_calls finish_reason in chat stream, got: %s", body)
+	}
+	if strings.Contains(body, `"finish_reason":"stop"`) {
+		t.Fatalf("unexpected stop finish_reason in custom tool-call turn, got: %s", body)
 	}
 	if !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("missing [DONE] marker in chat stream: %s", body)

@@ -41,7 +41,7 @@ go test ./internal/sse -run 'TranslateChatArgs|TranslateChatStress' -count=1
 - `POST /v1/completions` -> `handleCompletions()` (separate path, not unified)
 - `POST /api/chat` -> `handleOllamaChat()` (Ollama-specific transform path)
 
-The `route` parameter reflects the URL path. The **response format** is determined separately by `req.ResponseFormat`, which is derived from the request body: if the body uses `input` (Responses API shape), the response is Responses API format; if it uses `messages` (Chat shape), the response is Chat Completions format. This allows clients like Cursor that send `input` to `/v1/chat/completions` to receive Responses API events back.
+The `route` parameter reflects the URL path. The **response format** (`req.ResponseFormat`) is derived from the route: `/v1/chat/completions` always responds in Chat Completions format, `/v1/responses` always responds in Responses API format. Tool normalization uses a separate `toolFormat` that follows the input source — when the body uses `input` (Responses API shape), Responses-style tool parsing is preferred to support `custom` tool types.
 
 ### Universal Normalization Rules (`internal/proxy/universal.go`)
 

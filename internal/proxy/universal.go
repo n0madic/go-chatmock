@@ -26,7 +26,7 @@ const (
 )
 
 type universalRequest struct {
-	ResponseFormat          universalRoute // "chat" or "responses", derived from input format
+	ResponseFormat          universalRoute // "chat" or "responses", derived from route (endpoint)
 	RequestedModel          string
 	Model                   string
 	Stream                  bool
@@ -231,10 +231,7 @@ func (s *Server) normalizeUniversalRequest(body []byte, route universalRoute) (*
 	}
 	reasoningParam := buildReasoningWithModelFallback(s.Config, requestedModel, model, reasoningOverrides)
 
-	responseFormat := universalRouteChat
-	if inputSource == "input" {
-		responseFormat = universalRouteResponses
-	}
+	responseFormat := route
 
 	toolChoice := pickToolChoice(route, chatReq, responsesReq)
 	parallelToolCalls := false
@@ -244,7 +241,11 @@ func (s *Server) normalizeUniversalRequest(body []byte, route universalRoute) (*
 		parallelToolCalls = *responsesReq.ParallelToolCalls
 	}
 
-	tools, baseTools, hadResponsesTools, defaultWebSearchApplied, terr := s.normalizeUniversalTools(raw, responseFormat, chatReq, responsesReq, toolChoice)
+	toolFormat := route
+	if inputSource == "input" {
+		toolFormat = universalRouteResponses
+	}
+	tools, baseTools, hadResponsesTools, defaultWebSearchApplied, terr := s.normalizeUniversalTools(raw, toolFormat, chatReq, responsesReq, toolChoice)
 	if terr != nil {
 		return nil, terr
 	}
