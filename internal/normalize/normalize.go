@@ -65,8 +65,8 @@ func Enrich(body []byte, route string, cfg *config.ServerConfig, store *state.St
 	}
 	reasoningParam := buildReasoningWithModelFallback(cfg, requestedModel, model, reasoningOverrides)
 
-	responseFormat := "chat"
-	if inputSource == "input" {
+	responseFormat := route
+	if cfg.ResponseFormat == "input" && inputSource == "input" {
 		responseFormat = "responses"
 	}
 
@@ -78,7 +78,11 @@ func Enrich(body []byte, route string, cfg *config.ServerConfig, store *state.St
 		parallelToolCalls = *responsesReq.ParallelToolCalls
 	}
 
-	tools, baseTools, hadResponsesTools, defaultWebSearchApplied, terr := NormalizeTools(raw, responseFormat, chatReq, responsesReq, toolChoice, cfg.DefaultWebSearch)
+	toolFormat := route
+	if inputSource == "input" {
+		toolFormat = "responses"
+	}
+	tools, baseTools, hadResponsesTools, defaultWebSearchApplied, terr := NormalizeTools(raw, toolFormat, chatReq, responsesReq, toolChoice, cfg.DefaultWebSearch)
 	if terr != nil {
 		return nil, terr
 	}

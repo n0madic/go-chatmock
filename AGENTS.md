@@ -39,12 +39,12 @@ go test ./... -count=1
 
 ### Response Format Routing Rule
 
-**The response format is determined by the request format, NOT the URL route.** The `route` parameter only reflects the URL path. The actual response format (`req.ResponseFormat`) is derived from the request body:
+Controlled by `--response-format` flag (env: `CHATGPT_LOCAL_RESPONSE_FORMAT`). Two modes:
 
-- Request uses `input` field (Responses API shape) → response is **Responses API format** (SSE with `response.*` events or `ResponsesResponse` JSON)
-- Request uses `messages` field (Chat Completions shape) → response is **Chat Completions format** (SSE with `chat.completion.chunk` or `ChatCompletionResponse` JSON)
+- **`route`** (default) — The response format is determined by the URL route (endpoint). `/v1/chat/completions` always responds in Chat Completions format, `/v1/responses` always responds in Responses API format.
+- **`input`** — When the request body uses `input` (Responses API shape), the response format is Responses API regardless of which endpoint received the request. Requests using `messages` (Chat shape) still follow the route. This restores the pre-default behavior where body shape could influence the response format.
 
-This means a Responses API request sent to `/v1/chat/completions` receives a Responses API response, and a Chat Completions request sent to `/v1/responses` receives a Chat Completions response. The route is irrelevant — only the request body shape matters. This allows clients like Cursor that send `input` to any endpoint to always receive Responses API events back.
+Tool normalization uses a separate `toolFormat` that follows the input source — when the body uses `input` (Responses API shape), Responses-style tool parsing is preferred to support `custom` tool types.
 
 ### Responses API Passthrough (`internal/pipeline/passthrough.go`)
 
@@ -56,7 +56,7 @@ When the `/v1/responses` route receives a request body with a top-level `input` 
 
 This is the primary path for Cursor and other Responses API native clients.
 
-Note: On the chat route (`/v1/chat/completions`), requests with `input` still go through normalization (which handles system-message extraction from input items, targeted function_call injection, server prompt fallback, etc.), but the **response format** is still set to Responses API based on input source — see the response format routing rule above.
+Note: On the chat route (`/v1/chat/completions`), requests with `input` still go through normalization (which handles system-message extraction from input items, targeted function_call injection, server prompt fallback, etc.), and the **response format** is Chat Completions (determined by route). Tool normalization uses the input source to select the parsing format for tools.
 
 ### Unified Request Handling Principle
 
@@ -76,7 +76,7 @@ Instructions, tools, reasoning, and all other fields are processed identically r
   - Chat tools: `{"type":"function","function":{...}}`
   - Responses tools: `{"type":"function","name":"...","parameters":...}`
   - Custom tools: `{"type":"custom","name":"...","format":...}` (e.g. Cursor's `ApplyPatch` with grammar-based format)
-- Tool selection preference follows `ResponseFormat`: when the request uses `input` (Responses API format), Responses-style tool parsing is preferred, which supports `custom` tool types that Chat format cannot represent.
+- Tool selection preference follows `toolFormat` (derived from input source): when the request uses `input` (Responses API format), Responses-style tool parsing is preferred, which supports `custom` tool types that Chat format cannot represent.
 - `responses_tools` is additive and currently supports only `web_search` / `web_search_preview`.
 - `tool_choice` and `parallel_tool_calls` are normalized from either schema.
 - System text from input/messages is folded into `instructions` when possible.

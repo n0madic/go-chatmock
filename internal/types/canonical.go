@@ -4,7 +4,7 @@ package types
 // after decoding. It is format-agnostic and carries all information needed
 // for normalization, upstream dispatch, and response encoding.
 type CanonicalRequest struct {
-	// Format tracks the original request format for response encoding.
+	// Format tracks the response format, derived from the route (endpoint).
 	ResponseFormat string // "chat", "responses", "text", "anthropic", "ollama"
 
 	// Model fields

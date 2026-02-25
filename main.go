@@ -155,6 +155,7 @@ func cmdServe() int {
 	fs.StringVar(&cfg.DebugModel, "debug-model", cfg.DebugModel, "Force model name override")
 	fs.BoolVar(&cfg.ExposeReasoningModels, "expose-reasoning-models", cfg.ExposeReasoningModels, "Expose effort variants as separate models")
 	fs.BoolVar(&cfg.DefaultWebSearch, "enable-web-search", cfg.DefaultWebSearch, "Enable default web_search tool")
+	fs.StringVar(&cfg.ResponseFormat, "response-format", cfg.ResponseFormat, "Response format mode: 'route' (endpoint determines format) or 'input' (request body shape determines format)")
 	fs.Parse(os.Args[2:])
 
 	cfg.BaseInstructions = promptMD
