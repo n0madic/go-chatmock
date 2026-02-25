@@ -170,6 +170,18 @@ func (p *Pipeline) ExecutePassthrough(
 		}
 	}
 
+	// Ensure a session ID for upstream prompt caching. The normalized path
+	// (Do) calls EnsureSessionID automatically; for passthrough we must do it
+	// here because DoRaw receives the session ID as an opaque string.
+	sessionID := ctx.SessionID
+	if sessionID == "" {
+		inputItems := extractInputItemsFromRaw(raw)
+		sessionID = p.Upstream.Sessions.EnsureSessionID(instructions, inputItems, "")
+	}
+
+	// Inject prompt_cache_key into the body to match the header-based session.
+	raw["prompt_cache_key"] = sessionID
+
 	if p.Config.Verbose {
 		reasoningEffort := ""
 		reasoningSummary := ""
@@ -187,6 +199,7 @@ func (p *Pipeline) ExecutePassthrough(
 			"conversation_id", conversationID != "",
 			"reasoning_effort", reasoningEffort,
 			"reasoning_summary", reasoningSummary,
+			"session_id", sessionID,
 			"session_override", ctx.SessionID != "",
 		)
 	}
@@ -199,7 +212,7 @@ func (p *Pipeline) ExecutePassthrough(
 	}
 
 	// Send upstream via DoRaw
-	resp, err := p.Upstream.DoRaw(ctx.Context, patchedBody, ctx.SessionID)
+	resp, err := p.Upstream.DoRaw(ctx.Context, patchedBody, sessionID)
 	if err != nil {
 		writeErr(http.StatusUnauthorized, err.Error())
 		return
