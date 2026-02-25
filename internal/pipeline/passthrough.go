@@ -83,7 +83,7 @@ func (p *Pipeline) ExecutePassthrough(
 	inputSystemInstructions := extractAndRemoveSystemMessages(raw)
 
 	// Strip fields unsupported by the upstream ChatGPT Codex backend.
-	for _, key := range []string{"metadata", "stream_options", "user", "prompt_cache_retention"} {
+	for _, key := range []string{"metadata", "stream_options", "user", "prompt_cache_retention", "max_output_tokens"} {
 		delete(raw, key)
 	}
 
