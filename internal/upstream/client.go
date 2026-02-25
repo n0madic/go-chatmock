@@ -113,7 +113,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 		payload.Reasoning = reasoningToSDK(req.ReasoningParam)
 	}
 
-	body, err := marshalWithStream(payload)
+	body, err := marshalWithStream(&payload)
 	if err != nil {
 		return nil, err
 	}
@@ -201,20 +201,12 @@ func (c *Client) sendPayload(ctx context.Context, body []byte, sessionID, access
 	}, nil
 }
 
-// marshalWithStream marshals an SDK payload and injects stream=true.
-// The SDK ResponseNewParams does not have a stream field; we add it
-// manually so the upstream receives stream=true.
-func marshalWithStream(payload any) ([]byte, error) {
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal payload: %w", err)
-	}
-	var payloadMap map[string]any
-	if err := json.Unmarshal(payloadJSON, &payloadMap); err != nil {
-		return nil, fmt.Errorf("failed to parse payload JSON: %w", err)
-	}
-	payloadMap["stream"] = true
-	body, err := json.Marshal(payloadMap)
+// marshalWithStream marshals an SDK payload with stream=true injected.
+// The SDK ResponseNewParams does not have a stream field, so we use
+// SetExtraFields to add it before marshaling.
+func marshalWithStream(payload *responses.ResponseNewParams) ([]byte, error) {
+	payload.SetExtraFields(map[string]any{"stream": true})
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
