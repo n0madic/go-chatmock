@@ -105,7 +105,7 @@ func (p *Pipeline) ExecutePassthrough(
 	delete(raw, "previous_response_id")
 
 	// Strip fields unsupported by the upstream ChatGPT Codex backend.
-	for _, key := range []string{"metadata", "stream_options", "user"} {
+	for _, key := range []string{"metadata", "stream_options", "user", "prompt_cache_retention"} {
 		delete(raw, key)
 	}
 
