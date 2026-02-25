@@ -21,7 +21,7 @@ import (
 	"github.com/n0madic/go-chatmock/internal/limits"
 	"github.com/n0madic/go-chatmock/internal/models"
 	"github.com/n0madic/go-chatmock/internal/oauth"
-	"github.com/n0madic/go-chatmock/internal/proxy"
+	"github.com/n0madic/go-chatmock/internal/server"
 )
 
 //go:embed prompts/prompt.md
@@ -160,7 +160,7 @@ func cmdServe() int {
 	cfg.BaseInstructions = promptMD
 	cfg.CodexInstructions = promptGPT5CodexMD
 
-	srv := proxy.New(cfg)
+	srv := server.New(cfg)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

@@ -199,17 +199,21 @@ For upstream SSE responses, debug body output is reduced to `response.completed`
 main.go                    CLI entry point (login, serve, info)
 internal/
   auth/                    Auth file I/O, JWT parsing, OAuth2 config, token refresh
+  codec/                   Format-specific Encoder implementations (Chat, Responses, Text, Anthropic, Ollama)
   config/                  Server configuration, environment defaults
-  models/                  Model catalog, alias mapping, effort-level variants
-  oauth/                   OAuth callback server (port 1455), PKCE via golang.org/x/oauth2
-  proxy/                   HTTP server, CORS middleware, OpenAI + Ollama route handlers
-  reasoning/               Reasoning effort/summary building, compat mode formatting
-  responses-state/          In-memory previous_response_id polyfill state (TTL + capacity)
-  session/                 Deterministic session ID cache (SHA256 + UUID, LRU 10k entries)
-  sse/                     SSE reader, chat/text/Ollama stream translators
-  transform/               Message format conversion (Chat → Responses API, Ollama → OpenAI)
-  upstream/                Responses API client (POST to chatgpt.com backend)
   limits/                  Rate limit header parsing, JSON persistence
+  models/                  Model catalog, alias mapping, effort-level variants
+  normalize/               Request decoding and normalization into CanonicalRequest
+  oauth/                   OAuth callback server (port 1455), PKCE via golang.org/x/oauth2
+  pipeline/                Orchestrates decode → normalize → upstream → translate → encode flow
+  reasoning/               Reasoning effort/summary building, compat mode formatting
+  server/                  HTTP server, CORS middleware, route handlers (OpenAI, Anthropic, Ollama)
+  session/                 Deterministic session ID cache (SHA256 + UUID, LRU 10k entries)
+  state/                   In-memory previous_response_id polyfill state (TTL + capacity)
+  stream/                  SSE reader, tool buffer, usage extraction, stream helpers
+  transform/               Message format conversion (Chat → Responses API, Ollama → OpenAI)
+  types/                   Shared request/response structs, CanonicalRequest, pointer helpers
+  upstream/                Responses API client (POST to chatgpt.com backend)
 ```
 
 System instruction prompts (`prompts/prompt.md`, `prompts/prompt_gpt5_codex.md`) are embedded into the binary at compile time via `go:embed`.
@@ -220,7 +224,7 @@ System instruction prompts (`prompts/prompt.md`, `prompts/prompt_gpt5_codex.md`)
 go test ./...
 ```
 
-Packages with tests include: `auth`, `models`, `proxy`, `responses-state`, `sse`, `transform`, `types`, `upstream`.
+Packages with tests include: `auth`, `config`, `limits`, `models`, `oauth`, `server`, `session`, `state`, `stream`, `transform`, `types`, `upstream`.
 
 ## Interoperability
 
