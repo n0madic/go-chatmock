@@ -198,10 +198,7 @@ func collectFullResponse(body io.Reader) *codec.CollectedResponse {
 			return out
 		case "response.completed":
 			if r, ok := evt.Data["response"].(map[string]any); ok {
-				if out.RawResponse == nil {
-					out.RawResponse = map[string]any{}
-				}
-				out.RawResponse["_upstream_response"] = r
+				out.RawResponse = r
 			}
 			return out
 		}
