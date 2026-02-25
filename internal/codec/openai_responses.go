@@ -75,6 +75,9 @@ func (t *responsesStreamTranslator) Translate(reader *stream.Reader) {
 		}
 		gotEvents = true
 
+		if evt.Type != "" {
+			fmt.Fprintf(t.w, "event: %s\n", evt.Type)
+		}
 		fmt.Fprintf(t.w, "data: %s\n\n", evt.Raw)
 		flusher.Flush()
 

@@ -246,6 +246,9 @@ func (p *Pipeline) streamResponsesPassthrough(
 			break
 		}
 
+		if evt.Type != "" {
+			fmt.Fprintf(w, "event: %s\n", evt.Type)
+		}
 		fmt.Fprintf(w, "data: %s\n\n", evt.Raw)
 		flusher.Flush()
 
