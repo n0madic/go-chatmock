@@ -3,3 +3,8 @@ go-chatmock
 *.py
 *.pyc
 CLAUDE.md
+*.diff
+*.patch
+*.bak
+*.tmp
+*.swp
