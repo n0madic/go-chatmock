@@ -48,6 +48,18 @@ func responsesInputItemToSDK(item types.ResponsesInputItem) (responses.ResponseI
 		}
 		return responses.ResponseInputItemParamOfFunctionCallOutput(item.CallID, item.Output), true
 
+	case "custom_tool_call":
+		if item.CallID == "" || item.Name == "" {
+			return responses.ResponseInputItemUnionParam{}, false
+		}
+		return responses.ResponseInputItemParamOfCustomToolCall(item.CallID, item.Input, item.Name), true
+
+	case "custom_tool_call_output":
+		if item.CallID == "" {
+			return responses.ResponseInputItemUnionParam{}, false
+		}
+		return responses.ResponseInputItemParamOfCustomToolCallOutput(item.CallID, item.Output), true
+
 	default:
 		return responses.ResponseInputItemUnionParam{}, false
 	}

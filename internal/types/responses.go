@@ -89,6 +89,7 @@ type ResponsesInputItem struct {
 	Content   []ResponsesContent `json:"content,omitempty"`
 	Name      string             `json:"name,omitempty"`
 	Arguments string             `json:"arguments,omitempty"`
+	Input     string             `json:"input,omitempty"`
 	CallID    string             `json:"call_id,omitempty"`
 	Output    string             `json:"-"`
 }
@@ -103,6 +104,7 @@ func (item ResponsesInputItem) MarshalJSON() ([]byte, error) {
 		Content   []ResponsesContent `json:"content,omitempty"`
 		Name      string             `json:"name,omitempty"`
 		Arguments string             `json:"arguments,omitempty"`
+		Input     string             `json:"input,omitempty"`
 		CallID    string             `json:"call_id,omitempty"`
 		Output    *string            `json:"output,omitempty"`
 	}
@@ -112,9 +114,10 @@ func (item ResponsesInputItem) MarshalJSON() ([]byte, error) {
 		Content:   item.Content,
 		Name:      item.Name,
 		Arguments: item.Arguments,
+		Input:     item.Input,
 		CallID:    item.CallID,
 	}
-	if item.Type == "function_call_output" || item.Output != "" {
+	if item.Type == "function_call_output" || item.Type == "custom_tool_call_output" || item.Output != "" {
 		m.Output = &item.Output
 	}
 	return json.Marshal(m)
@@ -127,6 +130,7 @@ type Alias struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Arguments string          `json:"arguments,omitempty"`
+	Input     string          `json:"input,omitempty"`
 	CallID    string          `json:"call_id,omitempty"`
 	Output    json.RawMessage `json:"output,omitempty"`
 }
@@ -143,6 +147,7 @@ func (item *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 	item.Role = alias.Role
 	item.Name = alias.Name
 	item.Arguments = alias.Arguments
+	item.Input = alias.Input
 	item.CallID = alias.CallID
 	item.Output = parseResponsesOutput(alias.Output)
 
