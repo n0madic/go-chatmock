@@ -158,7 +158,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
-	body, ok := readBody(w, r, s.chatEnc)
+	body, ok := readBody(w, r, s.responsesEnc)
 	if !ok {
 		return
 	}

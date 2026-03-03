@@ -41,8 +41,14 @@ func (p *Pipeline) Execute(
 	chatEnc codec.Encoder,
 	responsesEnc codec.Encoder,
 ) {
+	// Error encoder: before normalization, fall back to route;
+	// after normalization, use the resolved response format.
+	errEnc := chatEnc
+	if route == "responses" {
+		errEnc = responsesEnc
+	}
 	writeErr := func(status int, msg string) {
-		chatEnc.WriteError(w, status, msg)
+		errEnc.WriteError(w, status, msg)
 	}
 
 	req, nerr := normalize.Enrich(body, route, p.Config, p.Store)
@@ -50,6 +56,13 @@ func (p *Pipeline) Execute(
 		writeErr(nerr.StatusCode, nerr.Message)
 		return
 	}
+
+	// Select encoder based on resolved response format (--response-format)
+	enc := chatEnc
+	if req.ResponseFormat == "responses" {
+		enc = responsesEnc
+	}
+	errEnc = enc
 
 	if ok, hint := p.Registry.IsKnownModel(req.Model); !ok && p.Config.DebugModel == "" {
 		msg := "model " + req.Model + " is not available via this endpoint"
@@ -84,12 +97,6 @@ func (p *Pipeline) Execute(
 	outputModel := req.RequestedModel
 	if outputModel == "" {
 		outputModel = req.Model
-	}
-
-	// Select encoder based on response format
-	enc := chatEnc
-	if req.ResponseFormat == "responses" {
-		enc = responsesEnc
 	}
 
 	if req.Stream {
