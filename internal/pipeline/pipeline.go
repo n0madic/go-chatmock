@@ -321,13 +321,13 @@ func (p *Pipeline) logNormalizedRequest(route string, req *types.CanonicalReques
 			"input_items", len(req.InputItems),
 			"input_source", req.InputSource,
 			"tools", len(req.Tools),
-			"tool_choice", summarizeToolChoice(req.ToolChoice),
+			"tool_choice", types.SummarizeToolChoice(req.ToolChoice),
 			"responses_tools", boolToInt(req.HadResponsesTools),
 			"default_web_search", req.DefaultWebSearchApplied,
 			"parallel_tool_calls", req.ParallelToolCalls,
 			"include_count", len(req.Include),
-			"store_requested", boolPtrState(req.StoreRequested),
-			"store_upstream", boolPtrState(req.StoreForUpstream),
+			"store_requested", types.BoolPtrState(req.StoreRequested),
+			"store_upstream", types.BoolPtrState(req.StoreForUpstream),
 			"reasoning_effort", reasoningEffort,
 			"reasoning_summary", reasoningSummary,
 			"prompt_fallback", req.UsedPromptFallback,
@@ -345,15 +345,15 @@ func (p *Pipeline) logNormalizedRequest(route string, req *types.CanonicalReques
 			"input_items", len(req.InputItems),
 			"input_source", req.InputSource,
 			"tools", len(req.Tools),
-			"tool_choice", summarizeToolChoice(req.ToolChoice),
+			"tool_choice", types.SummarizeToolChoice(req.ToolChoice),
 			"parallel_tool_calls", req.ParallelToolCalls,
 			"include_count", len(req.Include),
 			"instructions_chars", len(req.Instructions),
 			"previous_response_id", req.PreviousResponseID != "",
 			"previous_response_id_auto", req.AutoPreviousResponseID,
 			"conversation_id", req.ConversationID != "",
-			"store_requested", boolPtrState(req.StoreRequested),
-			"store_upstream", boolPtrState(req.StoreForUpstream),
+			"store_requested", types.BoolPtrState(req.StoreRequested),
+			"store_upstream", types.BoolPtrState(req.StoreForUpstream),
 			"default_web_search", req.DefaultWebSearchApplied,
 			"reasoning_effort", reasoningEffort,
 			"reasoning_summary", reasoningSummary,
@@ -450,29 +450,13 @@ func appendContextHistory(base []types.ResponsesInputItem, delta []types.Respons
 	if len(base) == 0 && len(delta) == 0 {
 		return nil
 	}
-	combined := cloneInputItems(base)
+	combined := types.CloneInputItems(base)
 	if len(delta) > 0 {
-		combined = append(combined, cloneInputItems(delta)...)
+		combined = append(combined, types.CloneInputItems(delta)...)
 	}
 	return combined
 }
 
-func cloneInputItems(items []types.ResponsesInputItem) []types.ResponsesInputItem {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]types.ResponsesInputItem, len(items))
-	copy(out, items)
-	for i := range out {
-		if len(items[i].Content) == 0 {
-			continue
-		}
-		content := make([]types.ResponsesContent, len(items[i].Content))
-		copy(content, items[i].Content)
-		out[i].Content = content
-	}
-	return out
-}
 
 func extractFunctionCalls(items []types.ResponsesInputItem) []state.FunctionCall {
 	if len(items) == 0 {
@@ -492,44 +476,6 @@ func extractFunctionCalls(items []types.ResponsesInputItem) []state.FunctionCall
 	return calls
 }
 
-func summarizeToolChoice(choice any) string {
-	switch v := choice.(type) {
-	case nil:
-		return "auto"
-	case string:
-		val := strings.TrimSpace(v)
-		if val == "" {
-			return "auto"
-		}
-		return val
-	case map[string]any:
-		kind, _ := v["type"].(string)
-		if fn, ok := v["function"].(map[string]any); ok {
-			if name, _ := fn["name"].(string); name != "" {
-				if kind != "" {
-					return kind + ":" + name
-				}
-				return "function:" + name
-			}
-		}
-		if kind != "" {
-			return kind
-		}
-		return "object"
-	default:
-		return "auto"
-	}
-}
-
-func boolPtrState(v *bool) string {
-	if v == nil {
-		return "unset"
-	}
-	if *v {
-		return "true"
-	}
-	return "false"
-}
 
 func boolToInt(v bool) int {
 	if v {

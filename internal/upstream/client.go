@@ -129,10 +129,10 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 			"model", req.Model,
 			"input_items", len(req.InputItems),
 			"tools", len(req.Tools),
-			"tool_choice", summarizeToolChoice(toolChoice),
+			"tool_choice", types.SummarizeToolChoice(toolChoice),
 			"parallel_tool_calls", req.ParallelToolCalls,
 			"include_count", len(includes),
-			"store", boolPtrState(req.Store),
+			"store", types.BoolPtrState(req.Store),
 			"reasoning_effort", reasoningEffort,
 			"reasoning_summary", reasoningSummary,
 			"instructions_chars", len(req.Instructions),
@@ -213,60 +213,12 @@ func marshalWithStream(payload *responses.ResponseNewParams) ([]byte, error) {
 	return body, nil
 }
 
-func summarizeToolChoice(choice any) string {
-	switch v := choice.(type) {
-	case nil:
-		return "auto"
-	case string:
-		v = strings.TrimSpace(v)
-		if v == "" {
-			return "auto"
-		}
-		return v
-	case map[string]any:
-		kind, _ := v["type"].(string)
-		if fn, ok := v["function"].(map[string]any); ok {
-			if name, _ := fn["name"].(string); name != "" {
-				if kind != "" {
-					return kind + ":" + name
-				}
-				return "function:" + name
-			}
-		}
-		if kind != "" {
-			return kind
-		}
-		return "object"
-	default:
-		return fmt.Sprintf("%T", choice)
-	}
-}
-
-func boolPtrState(v *bool) string {
-	if v == nil {
-		return "unset"
-	}
-	if *v {
-		return "true"
-	}
-	return "false"
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		v = strings.TrimSpace(v)
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
 
 func upstreamRequestID(headers http.Header) string {
 	if headers == nil {
 		return ""
 	}
-	return firstNonEmpty(
+	return types.FirstNonEmpty(
 		headers.Get("x-request-id"),
 		headers.Get("x-openai-request-id"),
 		headers.Get("x-oai-request-id"),

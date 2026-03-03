@@ -51,7 +51,7 @@ func (s *Server) handleListModelsAnthropic(w http.ResponseWriter, r *http.Reques
 		data = append(data, types.AnthropicModel{
 			ID:          m.Slug,
 			Type:        "model",
-			DisplayName: firstNonEmpty(m.DisplayName, m.Slug),
+			DisplayName: types.FirstNonEmpty(m.DisplayName, m.Slug),
 			CreatedAt:   anthropicModelCreatedAt,
 		})
 		if s.Config.ExposeReasoningModels {
@@ -203,11 +203,3 @@ func validateAnthropicHeaders(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if s := strings.TrimSpace(v); s != "" {
-			return s
-		}
-	}
-	return ""
-}

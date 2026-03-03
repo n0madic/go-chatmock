@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/n0madic/go-chatmock/internal/auth"
 	"github.com/n0madic/go-chatmock/internal/codec"
 	"github.com/n0madic/go-chatmock/internal/limits"
 	"github.com/n0madic/go-chatmock/internal/models"
@@ -66,16 +68,7 @@ func (s *Server) handleTextCompletions(w http.ResponseWriter, r *http.Request) {
 	messages := []types.ChatMessage{{Role: "user", Content: prompt}}
 	inputItems := transform.ChatMessagesToResponsesInput(messages)
 
-	var reasoningOverrides *types.ReasoningParam
-	if ro, ok := payload["reasoning"].(map[string]any); ok {
-		reasoningOverrides = &types.ReasoningParam{}
-		if e, ok := ro["effort"].(string); ok {
-			reasoningOverrides.Effort = e
-		}
-		if sm, ok := ro["summary"].(string); ok {
-			reasoningOverrides.Summary = sm
-		}
-	}
+	reasoningOverrides := reasoning.ParseFromRaw(payload)
 	if reasoningOverrides == nil {
 		reasoningOverrides = reasoning.ExtractFromModelName(requestedModel)
 	}
@@ -115,7 +108,11 @@ func (s *Server) handleTextCompletions(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.Pipeline.Upstream.Do(r.Context(), upReq)
 	if err != nil {
-		s.textEnc.WriteError(w, http.StatusUnauthorized, err.Error())
+		status := http.StatusBadGateway
+		if errors.Is(err, auth.ErrNoCredentials) {
+			status = http.StatusUnauthorized
+		}
+		s.textEnc.WriteError(w, status, err.Error())
 		return
 	}
 	limits.RecordFromResponse(resp.Headers)
@@ -236,7 +233,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 			"messages", len(req.Messages),
 			"input_items", len(inputItems),
 			"tools", len(tools),
-			"tool_choice", summarizeToolChoice(req.ToolChoice),
+			"tool_choice", types.SummarizeToolChoice(req.ToolChoice),
 			"system_chars", len(systemText),
 			"instructions_chars", len(instructions),
 			"default_web_search", defaultWebSearchApplied,
@@ -260,17 +257,16 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 
 	resp, err := s.Pipeline.Upstream.Do(r.Context(), upReq)
 	if err != nil {
-		codec.WriteAnthropicError(w, http.StatusUnauthorized, "authentication_error", err.Error())
+		if errors.Is(err, auth.ErrNoCredentials) {
+			codec.WriteAnthropicError(w, http.StatusUnauthorized, "authentication_error", err.Error())
+		} else {
+			codec.WriteAnthropicError(w, http.StatusBadGateway, "api_error", err.Error())
+		}
 		return
 	}
 	limits.RecordFromResponse(resp.Headers)
 
 	if resp.StatusCode >= 400 {
-		warnMsg := ""
-		if s.Config.Verbose {
-			warnMsg = "upstream rejected store parameter on anthropic route; retrying without store"
-		}
-		_ = warnMsg
 		resp2, errBody, retried, retryErr := s.Pipeline.Upstream.RetryIfStoreUnsupported(r.Context(), resp, upReq)
 		if retried {
 			if retryErr != nil {
@@ -395,7 +391,7 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 			"input_items", len(inputItems),
 			"images", len(topImages),
 			"tools", len(toolsResponses),
-			"tool_choice", summarizeToolChoice(toolChoice),
+			"tool_choice", types.SummarizeToolChoice(toolChoice),
 			"parallel_tool_calls", parallelToolCalls,
 			"reasoning_effort", reasoningEffort,
 			"reasoning_summary", reasoningSummary,
@@ -464,34 +460,6 @@ func boolVal(m map[string]any, key string) bool {
 	return v
 }
 
-func summarizeToolChoice(choice any) string {
-	switch v := choice.(type) {
-	case nil:
-		return "auto"
-	case string:
-		val := strings.TrimSpace(v)
-		if val == "" {
-			return "auto"
-		}
-		return val
-	case map[string]any:
-		kind, _ := v["type"].(string)
-		if fn, ok := v["function"].(map[string]any); ok {
-			if name, _ := fn["name"].(string); name != "" {
-				if kind != "" {
-					return kind + ":" + name
-				}
-				return "function:" + name
-			}
-		}
-		if kind != "" {
-			return kind
-		}
-		return "object"
-	default:
-		return "auto"
-	}
-}
 
 func convertSystemToUser(messages []types.ChatMessage) {
 	for i, m := range messages {

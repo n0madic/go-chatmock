@@ -118,7 +118,7 @@ func (s *Store) PutContext(responseID string, context []types.ResponsesInputItem
 	if responseID == "" {
 		return
 	}
-	ctxCopy := cloneInputItems(context)
+	ctxCopy := types.CloneInputItems(context)
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -131,7 +131,7 @@ func (s *Store) PutSnapshot(responseID string, context []types.ResponsesInputIte
 	if responseID == "" {
 		return
 	}
-	ctxCopy := cloneInputItems(context)
+	ctxCopy := types.CloneInputItems(context)
 	callMap := buildCallMap(calls)
 	if len(ctxCopy) == 0 && len(callMap) == 0 {
 		return
@@ -208,7 +208,7 @@ func (s *Store) GetContext(responseID string) ([]types.ResponsesInputItem, bool)
 	}
 	e.lastAccess = now
 	s.touchLRU(responseID, false, e)
-	return cloneInputItems(e.context), true
+	return types.CloneInputItems(e.context), true
 }
 
 // GetInstructions returns stored effective instructions for a response id.
@@ -377,19 +377,3 @@ func (s *Store) evictIfNeededLocked() {
 	}
 }
 
-func cloneInputItems(items []types.ResponsesInputItem) []types.ResponsesInputItem {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]types.ResponsesInputItem, len(items))
-	copy(out, items)
-	for i := range out {
-		if len(items[i].Content) == 0 {
-			continue
-		}
-		contentCopy := make([]types.ResponsesContent, len(items[i].Content))
-		copy(contentCopy, items[i].Content)
-		out[i].Content = contentCopy
-	}
-	return out
-}

@@ -2,12 +2,14 @@ package pipeline
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/n0madic/go-chatmock/internal/auth"
 	"github.com/n0madic/go-chatmock/internal/codec"
 	"github.com/n0madic/go-chatmock/internal/limits"
 	"github.com/n0madic/go-chatmock/internal/models"
@@ -132,16 +134,7 @@ func (p *Pipeline) ExecutePassthrough(
 	raw["stream"] = true
 
 	// Reasoning: apply model fallback if not provided
-	var reasoningOverrides *types.ReasoningParam
-	if ro, ok := raw["reasoning"].(map[string]any); ok {
-		reasoningOverrides = &types.ReasoningParam{}
-		if e, ok := ro["effort"].(string); ok {
-			reasoningOverrides.Effort = e
-		}
-		if sm, ok := ro["summary"].(string); ok {
-			reasoningOverrides.Summary = sm
-		}
-	}
+	reasoningOverrides := reasoning.ParseFromRaw(raw)
 	if reasoningOverrides == nil {
 		reasoningOverrides = reasoning.ExtractFromModelName(requestedModel)
 	}
@@ -214,7 +207,11 @@ func (p *Pipeline) ExecutePassthrough(
 	// Send upstream via DoRaw
 	resp, err := p.Upstream.DoRaw(ctx.Context, patchedBody, sessionID)
 	if err != nil {
-		writeErr(http.StatusUnauthorized, err.Error())
+		if errors.Is(err, auth.ErrNoCredentials) {
+			writeErr(http.StatusUnauthorized, err.Error())
+		} else {
+			writeErr(http.StatusBadGateway, err.Error())
+		}
 		return
 	}
 	limits.RecordFromResponse(resp.Headers)
@@ -235,8 +232,14 @@ func (p *Pipeline) ExecutePassthrough(
 	}
 
 	if streamReq {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			writeErr(http.StatusInternalServerError, "streaming not supported")
+			resp.Body.Body.Close()
+			return
+		}
 		enc.WriteStreamHeaders(w, resp.StatusCode)
-		p.streamResponsesPassthrough(w, resp, inputItems, instructions, conversationID)
+		p.streamResponsesPassthrough(w, flusher, resp, inputItems, instructions, conversationID)
 		return
 	}
 	p.collectResponsesPassthrough(w, resp, enc, outputModel, inputItems, instructions, conversationID)
@@ -245,17 +248,13 @@ func (p *Pipeline) ExecutePassthrough(
 // streamResponsesPassthrough forwards upstream SSE events as-is while capturing state.
 func (p *Pipeline) streamResponsesPassthrough(
 	w http.ResponseWriter,
+	flusher http.Flusher,
 	resp *upstream.Response,
 	inputItems []types.ResponsesInputItem,
 	instructions string,
 	conversationID string,
 ) {
 	defer resp.Body.Body.Close()
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		return
-	}
 
 	reader := stream.NewReader(resp.Body.Body)
 	var responseID string

@@ -11,13 +11,13 @@ import (
 // RestoreFunctionCallContext is a client-side polyfill for the Responses API
 // previous_response_id feature.
 func (s *Store) RestoreFunctionCallContext(inputItems []types.ResponsesInputItem, previousResponseID string, prependPreviousContext bool) ([]types.ResponsesInputItem, error) {
-	effectiveInput := cloneInputItems(inputItems)
+	effectiveInput := types.CloneInputItems(inputItems)
 
 	if previousResponseID != "" && prependPreviousContext {
 		previousContext, hasContext := s.GetContext(previousResponseID)
 		if hasContext && len(previousContext) > 0 {
 			if !hasResponsesInputPrefix(effectiveInput, previousContext) {
-				effectiveInput = append(cloneInputItems(previousContext), effectiveInput...)
+				effectiveInput = append(types.CloneInputItems(previousContext), effectiveInput...)
 			}
 		} else {
 			if !s.Exists(previousResponseID) {
