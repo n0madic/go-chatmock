@@ -42,6 +42,23 @@ func BuildReasoningParam(baseEffort, baseSummary string, overrides *types.Reason
 	return r
 }
 
+// ParseFromRaw extracts a ReasoningParam from a raw JSON map field.
+// Returns nil if the field is absent or not a map.
+func ParseFromRaw(raw map[string]any) *types.ReasoningParam {
+	ro, ok := raw["reasoning"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	p := &types.ReasoningParam{}
+	if e, ok := ro["effort"].(string); ok {
+		p.Effort = e
+	}
+	if sm, ok := ro["summary"].(string); ok {
+		p.Summary = sm
+	}
+	return p
+}
+
 // ExtractFromModelName infers reasoning overrides from a model name string.
 func ExtractFromModelName(model string) *types.ReasoningParam {
 	if model == "" {

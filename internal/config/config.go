@@ -26,6 +26,7 @@ type ServerConfig struct {
 	DebugModel            string
 	ExposeReasoningModels bool
 	DefaultWebSearch      bool
+	ResponseFormat        string
 	BaseInstructions      string
 	CodexInstructions     string
 }
@@ -64,6 +65,7 @@ func DefaultFromEnv() *ServerConfig {
 		DebugModel:            os.Getenv("CHATGPT_LOCAL_DEBUG_MODEL"),
 		ExposeReasoningModels: envBool("CHATGPT_LOCAL_EXPOSE_REASONING_MODELS"),
 		DefaultWebSearch:      envBool("CHATGPT_LOCAL_ENABLE_WEB_SEARCH"),
+		ResponseFormat:        envOrDefault("CHATGPT_LOCAL_RESPONSE_FORMAT", "route"),
 	}
 }
 

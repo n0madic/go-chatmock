@@ -60,14 +60,25 @@ type ResponsesOutputItem struct {
 	Name      string             `json:"name,omitempty"`
 	CallID    string             `json:"call_id,omitempty"`
 	Arguments string             `json:"arguments,omitempty"`
-	Input     any                `json:"input,omitempty"`
 }
 
 // ResponsesUsage holds token usage for a Responses API response.
 type ResponsesUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens,omitempty"`
+	InputTokens         int64                        `json:"input_tokens"`
+	OutputTokens        int64                        `json:"output_tokens"`
+	TotalTokens         int64                        `json:"total_tokens,omitempty"`
+	InputTokensDetails  *ResponsesUsageInputDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails *ResponsesUsageOutputDetails `json:"output_tokens_details,omitempty"`
+}
+
+// ResponsesUsageInputDetails holds detailed input token breakdown for the Responses API.
+type ResponsesUsageInputDetails struct {
+	CachedTokens int64 `json:"cached_tokens,omitempty"`
+}
+
+// ResponsesUsageOutputDetails holds detailed output token breakdown for the Responses API.
+type ResponsesUsageOutputDetails struct {
+	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
 }
 
 // ResponsesInputItem represents a single item in the Responses API input array.
@@ -78,15 +89,14 @@ type ResponsesInputItem struct {
 	Content   []ResponsesContent `json:"content,omitempty"`
 	Name      string             `json:"name,omitempty"`
 	Arguments string             `json:"arguments,omitempty"`
+	Input     string             `json:"input,omitempty"`
 	CallID    string             `json:"call_id,omitempty"`
 	Output    string             `json:"-"`
-	Input     any                `json:"-"`
 }
 
 // MarshalJSON implements custom JSON marshaling for ResponsesInputItem.
 // It always includes "output" for function_call_output items (even if empty),
 // and omits it for all other item types.
-// For custom_tool_call items, it emits "input" instead of "arguments".
 func (item ResponsesInputItem) MarshalJSON() ([]byte, error) {
 	type marshalItem struct {
 		Type      string             `json:"type"`
@@ -94,28 +104,20 @@ func (item ResponsesInputItem) MarshalJSON() ([]byte, error) {
 		Content   []ResponsesContent `json:"content,omitempty"`
 		Name      string             `json:"name,omitempty"`
 		Arguments string             `json:"arguments,omitempty"`
+		Input     string             `json:"input,omitempty"`
 		CallID    string             `json:"call_id,omitempty"`
 		Output    *string            `json:"output,omitempty"`
-		Input     any                `json:"input,omitempty"`
 	}
 	m := marshalItem{
-		Type:    item.Type,
-		Role:    item.Role,
-		Content: item.Content,
-		Name:    item.Name,
-		CallID:  item.CallID,
+		Type:      item.Type,
+		Role:      item.Role,
+		Content:   item.Content,
+		Name:      item.Name,
+		Arguments: item.Arguments,
+		Input:     item.Input,
+		CallID:    item.CallID,
 	}
-	if item.Type == "custom_tool_call" {
-		// custom_tool_call uses "input" field; prefer Input, fallback to Arguments.
-		if item.Input != nil {
-			m.Input = item.Input
-		} else if item.Arguments != "" {
-			m.Input = item.Arguments
-		}
-	} else {
-		m.Arguments = item.Arguments
-	}
-	if item.Type == "function_call_output" || item.Output != "" {
+	if item.Type == "function_call_output" || item.Type == "custom_tool_call_output" || item.Output != "" {
 		m.Output = &item.Output
 	}
 	return json.Marshal(m)
@@ -128,9 +130,9 @@ type Alias struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Arguments string          `json:"arguments,omitempty"`
+	Input     string          `json:"input,omitempty"`
 	CallID    string          `json:"call_id,omitempty"`
 	Output    json.RawMessage `json:"output,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
 }
 
 // UnmarshalJSON implements custom JSON unmarshaling for ResponsesInputItem.
@@ -145,14 +147,9 @@ func (item *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 	item.Role = alias.Role
 	item.Name = alias.Name
 	item.Arguments = alias.Arguments
+	item.Input = alias.Input
 	item.CallID = alias.CallID
 	item.Output = parseResponsesOutput(alias.Output)
-	item.Input = parseAny(alias.Input)
-
-	// For custom_tool_call: if Input is nil but Arguments is set, fallback.
-	if item.Type == "custom_tool_call" && item.Input == nil && item.Arguments != "" {
-		item.Input = item.Arguments
-	}
 
 	if alias.Content != nil {
 		var s string
@@ -216,23 +213,6 @@ type ResponsesContent struct {
 	ImageURL string `json:"image_url,omitempty"`
 }
 
-// parseAny converts a json.RawMessage into a native Go value (string, map, etc.).
-// Returns nil for empty/null input.
-func parseAny(raw json.RawMessage) any {
-	if len(raw) == 0 {
-		return nil
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	var obj any
-	if json.Unmarshal(raw, &obj) == nil {
-		return obj
-	}
-	return nil
-}
-
 // ResponsesTool represents a tool in the Responses API format.
 type ResponsesTool struct {
 	Type        string `json:"type"`
@@ -241,19 +221,4 @@ type ResponsesTool struct {
 	Strict      *bool  `json:"strict,omitempty"`
 	Parameters  any    `json:"parameters,omitempty"`
 	Format      any    `json:"format,omitempty"`
-}
-
-// UpstreamPayload represents the full payload sent to the ChatGPT backend.
-type UpstreamPayload struct {
-	Model             string               `json:"model"`
-	Instructions      string               `json:"instructions"`
-	Input             []ResponsesInputItem `json:"input"`
-	Tools             []ResponsesTool      `json:"tools"`
-	ToolChoice        any                  `json:"tool_choice"`
-	ParallelToolCalls bool                 `json:"parallel_tool_calls"`
-	Store             *bool                `json:"store,omitempty"`
-	Stream            bool                 `json:"stream"`
-	PromptCacheKey    string               `json:"prompt_cache_key"`
-	Include           []string             `json:"include,omitempty"`
-	Reasoning         *ReasoningParam      `json:"reasoning,omitempty"`
 }

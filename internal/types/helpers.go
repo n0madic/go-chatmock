@@ -1,6 +1,9 @@
 package types
 
-import "encoding/json"
+import (
+	"fmt"
+	"strings"
+)
 
 // StringPtr returns a pointer to the given string.
 func StringPtr(s string) *string {
@@ -12,41 +15,72 @@ func BoolPtr(b bool) *bool {
 	return &b
 }
 
-// IntFromAny converts a JSON-decoded numeric value to int.
-// Handles float64, int, and json.Number (all common from json.Unmarshal).
-func IntFromAny(v any) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	case json.Number:
-		i, _ := n.Int64()
-		return int(i)
+// BoolPtrState returns a human-readable string for a *bool: "true", "false", or "unset".
+func BoolPtrState(v *bool) string {
+	if v == nil {
+		return "unset"
 	}
-	return 0
+	if *v {
+		return "true"
+	}
+	return "false"
 }
 
-// ExtractUsageFromEvent extracts a *Usage from a response.completed SSE event data map.
-// Returns nil if no usage data is present.
-func ExtractUsageFromEvent(data map[string]any) *Usage {
-	resp, _ := data["response"].(map[string]any)
-	if resp == nil {
+// SummarizeToolChoice returns a short string summarizing a tool_choice value for logging.
+func SummarizeToolChoice(choice any) string {
+	switch v := choice.(type) {
+	case nil:
+		return "auto"
+	case string:
+		val := strings.TrimSpace(v)
+		if val == "" {
+			return "auto"
+		}
+		return val
+	case map[string]any:
+		kind, _ := v["type"].(string)
+		if fn, ok := v["function"].(map[string]any); ok {
+			if name, _ := fn["name"].(string); name != "" {
+				if kind != "" {
+					return kind + ":" + name
+				}
+				return "function:" + name
+			}
+		}
+		if kind != "" {
+			return kind
+		}
+		return "object"
+	default:
+		return fmt.Sprintf("%T", choice)
+	}
+}
+
+// FirstNonEmpty returns the first non-empty trimmed string from the given values.
+func FirstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// CloneInputItems creates a deep copy of a ResponsesInputItem slice,
+// including a copy of each item's Content slice.
+func CloneInputItems(items []ResponsesInputItem) []ResponsesInputItem {
+	if len(items) == 0 {
 		return nil
 	}
-	usage, _ := resp["usage"].(map[string]any)
-	if usage == nil {
-		return nil
+	out := make([]ResponsesInputItem, len(items))
+	copy(out, items)
+	for i := range out {
+		if len(items[i].Content) == 0 {
+			continue
+		}
+		content := make([]ResponsesContent, len(items[i].Content))
+		copy(content, items[i].Content)
+		out[i].Content = content
 	}
-	pt := IntFromAny(usage["input_tokens"])
-	ct := IntFromAny(usage["output_tokens"])
-	tt := IntFromAny(usage["total_tokens"])
-	if tt == 0 {
-		tt = pt + ct
-	}
-	return &Usage{
-		PromptTokens:     pt,
-		CompletionTokens: ct,
-		TotalTokens:      tt,
-	}
+	return out
 }

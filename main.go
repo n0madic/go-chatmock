@@ -21,7 +21,7 @@ import (
 	"github.com/n0madic/go-chatmock/internal/limits"
 	"github.com/n0madic/go-chatmock/internal/models"
 	"github.com/n0madic/go-chatmock/internal/oauth"
-	"github.com/n0madic/go-chatmock/internal/proxy"
+	"github.com/n0madic/go-chatmock/internal/server"
 )
 
 //go:embed prompts/prompt.md
@@ -155,12 +155,13 @@ func cmdServe() int {
 	fs.StringVar(&cfg.DebugModel, "debug-model", cfg.DebugModel, "Force model name override")
 	fs.BoolVar(&cfg.ExposeReasoningModels, "expose-reasoning-models", cfg.ExposeReasoningModels, "Expose effort variants as separate models")
 	fs.BoolVar(&cfg.DefaultWebSearch, "enable-web-search", cfg.DefaultWebSearch, "Enable default web_search tool")
+	fs.StringVar(&cfg.ResponseFormat, "response-format", cfg.ResponseFormat, "Response format mode: 'route' (endpoint determines format) or 'input' (request body shape determines format)")
 	fs.Parse(os.Args[2:])
 
 	cfg.BaseInstructions = promptMD
 	cfg.CodexInstructions = promptGPT5CodexMD
 
-	srv := proxy.New(cfg)
+	srv := server.New(cfg)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

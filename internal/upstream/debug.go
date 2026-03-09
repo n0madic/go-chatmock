@@ -203,7 +203,7 @@ func (d *debugDumpReadCloser) handleSSEFrame(frame []byte) {
 			continue
 		}
 		typ, _ := obj["type"].(string)
-		if typ != "response.completed" {
+		if typ != "response.completed" && typ != "response.failed" {
 			continue
 		}
 		d.hasData = true

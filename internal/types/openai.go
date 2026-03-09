@@ -80,12 +80,14 @@ type ReasoningParam struct {
 
 // ChatCompletionResponse represents a non-streaming chat completion response.
 type ChatCompletionResponse struct {
-	ID      string       `json:"id"`
-	Object  string       `json:"object"`
-	Created int64        `json:"created"`
-	Model   string       `json:"model"`
-	Choices []ChatChoice `json:"choices"`
-	Usage   *Usage       `json:"usage,omitempty"`
+	ID                string       `json:"id"`
+	Object            string       `json:"object"`
+	Created           int64        `json:"created"`
+	Model             string       `json:"model"`
+	Choices           []ChatChoice `json:"choices"`
+	Usage             *Usage       `json:"usage,omitempty"`
+	ServiceTier       string       `json:"service_tier,omitempty"`
+	SystemFingerprint string       `json:"system_fingerprint,omitempty"`
 }
 
 // ChatChoice is a single choice in a non-streaming response.
@@ -93,6 +95,7 @@ type ChatChoice struct {
 	Index        int             `json:"index"`
 	Message      ChatResponseMsg `json:"message"`
 	FinishReason *string         `json:"finish_reason"`
+	Logprobs     any             `json:"logprobs"`
 }
 
 // ChatResponseMsg is the message in a non-streaming response choice.
@@ -102,16 +105,20 @@ type ChatResponseMsg struct {
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	Reasoning        any        `json:"reasoning,omitempty"`
 	ReasoningSummary string     `json:"reasoning_summary,omitempty"`
+	Refusal          string     `json:"refusal,omitempty"`
+	Annotations      []any      `json:"annotations,omitempty"`
 }
 
 // ChatCompletionChunk represents a streaming chat completion chunk.
 type ChatCompletionChunk struct {
-	ID      string            `json:"id"`
-	Object  string            `json:"object"`
-	Created int64             `json:"created"`
-	Model   string            `json:"model"`
-	Choices []ChatChunkChoice `json:"choices"`
-	Usage   *Usage            `json:"usage,omitempty"`
+	ID                string            `json:"id"`
+	Object            string            `json:"object"`
+	Created           int64             `json:"created"`
+	Model             string            `json:"model"`
+	Choices           []ChatChunkChoice `json:"choices"`
+	Usage             *Usage            `json:"usage,omitempty"`
+	ServiceTier       string            `json:"service_tier,omitempty"`
+	SystemFingerprint string            `json:"system_fingerprint,omitempty"`
 }
 
 // ChatChunkChoice is a single choice in a streaming chunk.
@@ -119,6 +126,7 @@ type ChatChunkChoice struct {
 	Index        int       `json:"index"`
 	Delta        ChatDelta `json:"delta"`
 	FinishReason *string   `json:"finish_reason"`
+	Logprobs     any       `json:"logprobs"`
 }
 
 // ChatDelta holds the delta content in a streaming chunk choice.
@@ -128,6 +136,7 @@ type ChatDelta struct {
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	Reasoning        any        `json:"reasoning,omitempty"`
 	ReasoningSummary string     `json:"reasoning_summary,omitempty"`
+	Refusal          string     `json:"refusal,omitempty"`
 }
 
 // ReasoningContent represents o3 compat mode reasoning content.
@@ -178,9 +187,25 @@ type TextChunkChoice struct {
 
 // Usage holds token usage statistics.
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int64                    `json:"prompt_tokens"`
+	CompletionTokens        int64                    `json:"completion_tokens"`
+	TotalTokens             int64                    `json:"total_tokens"`
+	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+}
+
+// CompletionTokensDetails holds detailed completion token breakdown.
+type CompletionTokensDetails struct {
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
+	AudioTokens              int64 `json:"audio_tokens,omitempty"`
+	ReasoningTokens          int64 `json:"reasoning_tokens,omitempty"`
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
+}
+
+// PromptTokensDetails holds detailed prompt token breakdown.
+type PromptTokensDetails struct {
+	AudioTokens  int64 `json:"audio_tokens,omitempty"`
+	CachedTokens int64 `json:"cached_tokens,omitempty"`
 }
 
 // ModelList is the response for GET /v1/models.
