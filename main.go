@@ -4,9 +4,11 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -93,7 +95,7 @@ func cmdLogin() int {
 		srv.Shutdown()
 	}()
 
-	if err := srv.ListenAndServe(); err != nil && err.Error() != "http: Server closed" {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server error", "error", err)
 	}
 
@@ -174,7 +176,7 @@ func cmdServe() int {
 	}()
 
 	slog.Info("ChatMock starting", "host", cfg.Host, "port", cfg.Port)
-	if err := srv.ListenAndServe(); err != nil && err.Error() != "http: Server closed" {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server error", "error", err)
 		return 1
 	}

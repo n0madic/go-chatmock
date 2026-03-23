@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"sort"
 	"sync"
 
 	"github.com/google/uuid"
@@ -97,13 +96,6 @@ func canonicalizePrefix(instructions string, inputItems []types.ResponsesInputIt
 	if firstUser != nil {
 		prefix["first_user_message"] = firstUser
 	}
-
-	// Sort keys for deterministic output
-	keys := make([]string, 0, len(prefix))
-	for k := range prefix {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
 
 	data, _ := json.Marshal(prefix)
 	return string(data)

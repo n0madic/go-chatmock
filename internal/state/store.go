@@ -2,7 +2,8 @@ package state
 
 import (
 	"container/list"
-	"sort"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -181,11 +182,7 @@ func (s *Store) Get(responseID string) ([]FunctionCall, bool) {
 	}
 	e.lastAccess = now
 	s.touchLRU(responseID, false, e)
-	keys := make([]string, 0, len(e.calls))
-	for id := range e.calls {
-		keys = append(keys, id)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(e.calls))
 	out := make([]FunctionCall, 0, len(keys))
 	for _, id := range keys {
 		c := e.calls[id]

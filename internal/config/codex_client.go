@@ -19,10 +19,12 @@ const (
 	originatorOverrideEnv = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"
 )
 
-var (
-	cachedOSVersionOnce sync.Once
-	cachedOSVersion     string
-)
+var codexOSVersion = sync.OnceValue(func() string {
+	if v := detectOSVersion(); v != "" {
+		return v
+	}
+	return "unknown"
+})
 
 // CodexOriginator returns the originator used by Codex CLI.
 func CodexOriginator() string {
@@ -94,16 +96,6 @@ func codexArch() string {
 	}
 }
 
-func codexOSVersion() string {
-	cachedOSVersionOnce.Do(func() {
-		cachedOSVersion = detectOSVersion()
-		if cachedOSVersion == "" {
-			cachedOSVersion = "unknown"
-		}
-	})
-	return cachedOSVersion
-}
-
 func detectOSVersion() string {
 	switch runtime.GOOS {
 	case "darwin":
@@ -132,9 +124,8 @@ func detectLinuxVersion() string {
 	if err != nil {
 		return ""
 	}
-	lines := strings.Split(string(data), "\n")
 	values := map[string]string{}
-	for _, line := range lines {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

@@ -1,7 +1,6 @@
 package oauth
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -72,7 +71,7 @@ func TestExchangeCodeFailsWithBadCode(t *testing.T) {
 	s := newTestServer()
 	s.OAuthConfig.Endpoint.TokenURL = ts.URL
 
-	_, err := s.ExchangeCode(context.Background(), "bad_code")
+	_, err := s.ExchangeCode(t.Context(), "bad_code")
 	if err == nil {
 		t.Fatal("expected error for bad code, got nil")
 	}
